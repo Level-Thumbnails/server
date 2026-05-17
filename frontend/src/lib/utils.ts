@@ -64,16 +64,16 @@ export function parseSubmissionNote(note: string | null): SubmissionNotesObject 
 
   return {
     level_name: data.ln ? decodeURIComponent(data.ln) : null,
-    creator_id: Number(data.ci) || null,
+    creator_id: data.ci ? Number(data.ci) : null,
     creator_name: data.cn || null,
-    downloads: Number(data.dw) || null,
-    likes: Number(data.lk) || null,
-    stars: Number(data.ls) || null,
-    length: LENGTH_NAMES[Number(data.ll) as number] || null,
-    rating: RATING_NAMES[Number(data.lr) as number] || 'NA',
-    difficulty: DIFFICULTY_NAMES[Number(data.ld) as number] || 'NA',
-    percentage: Number(data.pr) || null,
-    attempt_time: Number(data.tm) || null,
+    downloads: data.dw ? Number(data.dw) : null,
+    likes: data.lk ? Number(data.lk) : null,
+    stars: data.ls ? Number(data.ls) : null,
+    length: LENGTH_NAMES[Number(data.ll)] || null,
+    rating: RATING_NAMES[Number(data.lr)] || 'NA',
+    difficulty: DIFFICULTY_NAMES[Number(data.ld)] || 'NA',
+    percentage: data.pr ? Number(data.pr) : null,
+    attempt_time: data.tm ? Number(data.tm) : null,
     message: data.m ? decodeURIComponent(data.m) : null,
   };
 }
