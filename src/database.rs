@@ -295,6 +295,14 @@ fn is_image_uploaded(level_id: i64) -> bool {
     Path::new(&format!("thumbnails/{}.webp", level_id)).exists()
 }
 
+#[derive(Debug, Clone)]
+pub struct UpdateUserOptions {
+    pub username: Option<String>,
+    pub account_id: Option<i64>,
+    pub discord_id: Option<Option<i64>>,
+    pub role: Option<Role>,
+}
+
 impl AppState {
     pub async fn new() -> Self {
         let connection_string = dotenv::var("DATABASE_URL").expect("DATABASE_URL must be set");
@@ -431,6 +439,53 @@ impl AppState {
             .fetch_optional(&*self.pool)
             .await
             .ok()?
+    }
+
+    pub async fn update_user(&self, id: i64, options: UpdateUserOptions) -> Result<User, sqlx::Error> {
+        use sqlx::QueryBuilder;
+
+        let mut builder = QueryBuilder::new("UPDATE users SET ");
+        let mut first = true;
+
+        if let Some(username) = options.username {
+            if !first { builder.push(", "); };
+            builder.push("username = ").push_bind(username);
+            first = false;
+        }
+
+        if let Some(account_id) = options.account_id {
+            if !first { builder.push(", "); };
+            builder.push("account_id = ").push_bind(account_id);
+            first = false;
+        }
+
+        if let Some(discord_opt) = options.discord_id {
+            if !first { builder.push(", "); };
+            if let Some(discord_id) = discord_opt {
+                builder.push("discord_id = ").push_bind(discord_id);
+            } else {
+                builder.push("discord_id = NULL");
+            }
+            first = false;
+        }
+
+        if let Some(role) = options.role {
+            if !first { builder.push(", "); };
+            builder.push("role = ").push_bind(role);
+            first = false;
+        }
+
+        if first {
+            return sqlx::query_as::<_, User>("SELECT * FROM users WHERE id = $1")
+                .bind(id)
+                .fetch_one(&*self.pool)
+                .await;
+        }
+
+        builder.push(" WHERE id = ").push_bind(id).push(" RETURNING *");
+
+        let query = builder.build_query_as::<User>();
+        query.fetch_one(&*self.pool).await
     }
 
     pub async fn add_upload(

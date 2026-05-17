@@ -1,5 +1,5 @@
 use axum::extract::DefaultBodyLimit;
-use axum::{Router, routing::delete, routing::get, routing::post};
+use axum::{Router, routing::delete, routing::get, routing::post, routing::patch};
 use std::path::Path;
 use tokio::net::TcpListener;
 use tokio::time::{Duration, sleep};
@@ -93,9 +93,9 @@ async fn main() {
         .route("/admin/settings", get(admin::get_settings))
         .route("/admin/settings", post(admin::update_settings))
         .route("/admin/users", get(admin::get_users))
-        // .route("/admin/user/:id", get(routes::admin::get_user_by_id))
-        // .route("/admin/user/:id", patch(routes::admin::update_user))
-        // .route("/admin/ban/:id", post(routes::admin::ban_user))
+        .route("/admin/user/{id}", patch(admin::update_user))
+        // .route("/admin/user/{id}", get(routes::admin::get_user_by_id))
+        // .route("/admin/ban/{id}", post(routes::admin::ban_user))
         .route("/admin/thumbnail/{id}", delete(admin::delete_thumbnail))
         .with_state(db)
         .layer(cors)

@@ -163,6 +163,113 @@ pub async fn get_users(
     }
 }
 
+#[derive(Deserialize, Debug)]
+pub struct UpdateUserPayload {
+    pub username: Option<String>,
+    pub account_id: Option<i64>,
+    pub discord_id: Option<Option<DiscordIdRaw>>,
+    pub role: Option<database::Role>,
+}
+
+#[derive(Deserialize, Debug)]
+#[serde(untagged)]
+pub enum DiscordIdRaw {
+    Str(String),
+    Num(i64),
+}
+
+pub async fn update_user(
+    headers: HeaderMap,
+    State(db): State<database::AppState>,
+    Path(id): Path<i64>,
+    Json(payload): Json<UpdateUserPayload>,
+) -> Response {
+    match mod_middleware(&headers, &db).await {
+        Ok(current_user) => {
+            match db.get_user_by_id(id).await {
+                Some(target_user) => {
+                    let rank = |r: &database::Role| match r {
+                        database::Role::User => 0,
+                        database::Role::Verified => 1,
+                        database::Role::Moderator => 2,
+                        database::Role::Admin => 3,
+                    };
+
+                    let current_rank = rank(&current_user.role);
+                    let target_rank = rank(&target_user.role);
+
+                    if current_rank <= target_rank {
+                        return util::str_response(StatusCode::FORBIDDEN, "Insufficient privileges to modify this user");
+                    }
+
+                    if let Some(ref new_role) = payload.role {
+                        if current_rank <= rank(new_role) {
+                            return util::str_response(StatusCode::FORBIDDEN, "Insufficient privileges to assign the requested role");
+                        }
+                    }
+
+                    let discord_db: Option<Option<i64>> = match payload.discord_id {
+                        None => None,
+                        Some(None) => Some(None),
+                        Some(Some(DiscordIdRaw::Num(n))) => Some(Some(n)),
+                        Some(Some(DiscordIdRaw::Str(s))) => match s.parse::<i64>() {
+                            Ok(n) => Some(Some(n)),
+                            Err(_) => return util::str_response(StatusCode::BAD_REQUEST, "Invalid discord_id format; must be numeric or stringified number"),
+                        },
+                    };
+
+                    let options = database::UpdateUserOptions {
+                        username: payload.username,
+                        account_id: payload.account_id,
+                        discord_id: discord_db,
+                        role: payload.role,
+                    };
+
+                    match db.update_user(id, options).await {
+                        Ok(_) => {
+                            let query_opts = database::AdminUserQueryOptions {
+                                page: 1,
+                                per_page: 1,
+                                id: Some(id),
+                                username: None,
+                                account_id: None,
+                                discord_id: None,
+                                role: None,
+                                total_uploads: None,
+                                banned: None,
+                                sort_by: database::UserListSortBy::Id,
+                                sort_dir: database::SortDirection::Asc,
+                            };
+
+                            match db.get_admin_users_paginated(query_opts).await {
+                                Ok(page_data) => {
+                                    util::response(
+                                        StatusCode::OK,
+                                        serde_json::json!({
+                                            "status": StatusCode::OK.as_u16(),
+                                            "data": page_data.users.into_iter().next(),
+                                        }),
+                                    )
+                                }
+                                Err(e) => util::str_response(
+                                    StatusCode::INTERNAL_SERVER_ERROR,
+                                    &format!("Failed to fetch updated user: {}", e),
+                                ),
+                            }
+                        }
+                        Err(e) => util::str_response(
+                            StatusCode::INTERNAL_SERVER_ERROR,
+                            &format!("Failed to update user: {}", e),
+                        ),
+                    }
+                }
+                None => util::str_response(StatusCode::NOT_FOUND, "User not found"),
+            }
+        }
+        Err(resp) => resp,
+    }
+}
+
 pub async fn delete_thumbnail(
     headers: HeaderMap,
     State(db): State<database::AppState>,

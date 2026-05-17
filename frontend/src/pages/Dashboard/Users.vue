@@ -2,10 +2,19 @@
 import { computed, onBeforeUnmount, onMounted, ref, watch } from 'vue';
 import LoadingCircle from '../../components/LoadingCircle.vue';
 import { fetchJson, unwrap } from '../../lib/utils';
+import SessionManager from '../../managers/session';
 import type { UserListResponse, UserRow } from '../../lib/types';
 
 type SortColumn = 'id' | 'username' | 'role' | 'total_uploads' | 'accepted' | 'pending' | 'rejected' | 'active_thumbnails';
 type SortDirection = 'asc' | 'desc';
+type UserRole = 'user' | 'verified' | 'moderator' | 'admin';
+
+const ROLE_HIERARCHY: Record<UserRole, number> = {
+  user: 0,
+  verified: 1,
+  moderator: 2,
+  admin: 3,
+};
 
 const loading = ref(true);
 const refreshing = ref(false);
@@ -13,6 +22,9 @@ const error = ref<string | null>(null);
 
 const users = ref<UserRow[]>([]);
 const total = ref(0);
+
+const currentUser = SessionManager.getUser();
+const currentUserRole = currentUser?.role || 'user';
 
 const currentPage = ref(1);
 const itemsPerPage = ref(10);
@@ -29,12 +41,135 @@ const sortBy = ref<SortColumn>('id');
 const sortDirection = ref<SortDirection>('asc');
 
 const copiedKey = ref<string | null>(null);
+const roleChangeLoading = ref<number | null>(null);
+const openRoleDropdown = ref<number | null>(null);
+const openRoleDropdownUp = ref(false);
+const roleDropdownPosition = ref<{ top: number; left: number; width: number } | null>(null);
 let copiedTimer: ReturnType<typeof setTimeout> | null = null;
 let debounceTimer: ReturnType<typeof setTimeout> | null = null;
 
 const totalPages = computed(() =>
   total.value === 0 ? 0 : Math.ceil(total.value / itemsPerPage.value)
 );
+
+function canManageRoles(): boolean {
+  return currentUserRole === 'moderator' || currentUserRole === 'admin';
+}
+
+function getAvailableRolesForUser(user: UserRow): UserRole[] {
+  if (!canManageRoles()) return [];
+
+  const targetHierarchy = ROLE_HIERARCHY[user.role];
+  const myHierarchy = ROLE_HIERARCHY[currentUserRole];
+
+  if (targetHierarchy >= myHierarchy) return [];
+
+  const availableRoles: UserRole[] = [];
+  const allRoles: UserRole[] = ['user', 'verified', 'moderator', 'admin'];
+
+  for (const role of allRoles) {
+    const roleHierarchy = ROLE_HIERARCHY[role];
+
+    if (roleHierarchy < myHierarchy && roleHierarchy !== targetHierarchy) {
+      availableRoles.push(role);
+    }
+  }
+
+  return availableRoles;
+}
+
+const activeRoleTarget = computed(() =>
+  openRoleDropdown.value === null
+    ? null
+    : users.value.find((u) => u.id === openRoleDropdown.value) ?? null
+);
+
+const activeRoleOptions = computed<UserRole[]>(() =>
+  activeRoleTarget.value ? getAvailableRolesForUser(activeRoleTarget.value) : []
+);
+
+const roleDropdownStyle = computed(() => {
+  if (!roleDropdownPosition.value) return {};
+  return {
+    top: `${roleDropdownPosition.value.top}px`,
+    left: `${roleDropdownPosition.value.left}px`,
+    minWidth: `${roleDropdownPosition.value.width}px`,
+  };
+});
+
+function closeRoleDropdown() {
+  openRoleDropdown.value = null;
+  openRoleDropdownUp.value = false;
+  roleDropdownPosition.value = null;
+}
+
+function setRoleDropdownPosition(anchor: HTMLElement, user: UserRow) {
+  const rect = anchor.getBoundingClientRect();
+  const optionsCount = Math.max(1, getAvailableRolesForUser(user).length);
+  const estimatedHeight = (optionsCount * 34) + 20;
+  const estimatedWidth = Math.max(140, Math.ceil(rect.width));
+  const margin = 8;
+  const gap = 4;
+
+  const spaceBelow = window.innerHeight - rect.bottom;
+  const shouldOpenUp = spaceBelow < estimatedHeight + gap && rect.top > spaceBelow;
+
+  let top = shouldOpenUp
+    ? rect.top - estimatedHeight - gap
+    : rect.bottom + gap;
+
+  top = Math.max(margin, Math.min(top, window.innerHeight - estimatedHeight - margin));
+
+  let left = rect.left;
+  left = Math.max(margin, Math.min(left, window.innerWidth - estimatedWidth - margin));
+
+  openRoleDropdownUp.value = shouldOpenUp;
+  roleDropdownPosition.value = {
+    top,
+    left,
+    width: estimatedWidth,
+  };
+}
+
+function toggleRoleDropdown(user: UserRow, event: MouseEvent) {
+  if (openRoleDropdown.value === user.id) {
+    closeRoleDropdown();
+    return;
+  }
+
+  const trigger = event.currentTarget;
+  if (!(trigger instanceof HTMLElement)) {
+    openRoleDropdown.value = user.id;
+    return;
+  }
+
+  openRoleDropdown.value = user.id;
+  setRoleDropdownPosition(trigger, user);
+}
+
+async function changeUserRole(userId: number, newRole: UserRole) {
+  roleChangeLoading.value = userId;
+  closeRoleDropdown();
+
+  try {
+    const res = await fetchJson(`/admin/user/${userId}`, {
+      method: 'PATCH',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ role: newRole }),
+    });
+
+    const updatedUser = unwrap<UserRow>(res);
+    const index = users.value.findIndex(u => u.id === userId);
+    if (index !== -1) {
+      users.value[index].role = updatedUser.role;
+    }
+  } catch (err) {
+    const message = err instanceof Error ? err.message : 'Failed to change user role';
+    alert(`Error: ${message}`);
+  } finally {
+    roleChangeLoading.value = null;
+  }
+}
 
 function buildParams(): URLSearchParams {
   const p = new URLSearchParams({
@@ -79,8 +214,28 @@ watch([filterUsername, filterId, filterAccountId, filterDiscordId, filterRole], 
 watch(itemsPerPage, () => { currentPage.value = 1; fetchUsers(); });
 watch(currentPage, fetchUsers);
 
-onMounted(fetchUsers);
+function handleDocumentClick(event: MouseEvent) {
+  if (openRoleDropdown.value === null) return;
+
+  const target = event.target;
+  if (!(target instanceof Element)) return;
+
+  if (!target.closest('.role-cell') && !target.closest('.role-dropdown-portal')) {
+    closeRoleDropdown();
+  }
+}
+
+onMounted(() => {
+  fetchUsers();
+  document.addEventListener('click', handleDocumentClick);
+  window.addEventListener('resize', closeRoleDropdown);
+  window.addEventListener('scroll', closeRoleDropdown, true);
+});
+
 onBeforeUnmount(() => {
+  document.removeEventListener('click', handleDocumentClick);
+  window.removeEventListener('resize', closeRoleDropdown);
+  window.removeEventListener('scroll', closeRoleDropdown, true);
   if (copiedTimer) clearTimeout(copiedTimer);
   if (debounceTimer) clearTimeout(debounceTimer);
 });
@@ -273,10 +428,25 @@ function handlePageInput() {
               </td>
 
               <td>
-                <span class="role-pill" :class="`role-${u.role}`">
-                  <img :src="roleIcon(u.role)" :alt="u.role" class="icon-sm" />
-                  {{ u.role }}
-                </span>
+                <div class="role-cell">
+                  <button
+                    v-if="getAvailableRolesForUser(u).length > 0"
+                    class="role-pill"
+                    :class="`role-${u.role}`"
+                    :disabled="roleChangeLoading === u.id"
+                    @click="toggleRoleDropdown(u, $event)"
+                    :title="roleChangeLoading === u.id ? 'Changing role...' : 'Click to change role'"
+                  >
+                    <img :src="roleIcon(u.role)" :alt="u.role" class="icon-sm" />
+                    {{ u.role }}
+                    <span v-if="roleChangeLoading !== u.id" class="dropdown-arrow">▼</span>
+                  </button>
+                  <span v-else class="role-pill" :class="`role-${u.role}`">
+                    <img :src="roleIcon(u.role)" :alt="u.role" class="icon-sm" />
+                    {{ u.role }}
+                  </span>
+
+                </div>
               </td>
 
               <td>{{ u.total_uploads }}</td>
@@ -292,6 +462,26 @@ function handlePageInput() {
           </tbody>
         </table>
       </div>
+
+      <Teleport to="body">
+        <div
+          v-if="activeRoleTarget && activeRoleOptions.length > 0"
+          class="role-dropdown role-dropdown-portal"
+          :class="{ 'open-up': openRoleDropdownUp }"
+          :style="roleDropdownStyle"
+        >
+          <button
+            v-for="role in activeRoleOptions"
+            :key="role"
+            class="role-option"
+            :disabled="roleChangeLoading === activeRoleTarget.id"
+            @click="changeUserRole(activeRoleTarget.id, role)"
+          >
+            <img :src="roleIcon(role)" :alt="role" class="icon-sm" />
+            {{ role }}
+          </button>
+        </div>
+      </Teleport>
 
     </template>
   </div>
@@ -569,6 +759,78 @@ function handlePageInput() {
   text-transform: capitalize;
   border: 1px solid rgba(255, 255, 255, 0.08);
   white-space: nowrap;
+}
+
+.role-pill:not(:disabled) {
+  cursor: pointer;
+  transition: transform 0.1s, box-shadow 0.1s;
+}
+
+.role-pill:not(:disabled):hover {
+  transform: translateY(-1px);
+  box-shadow: 0 4px 12px rgba(0, 0, 0, 0.3);
+}
+
+.role-pill:disabled {
+  opacity: 0.6;
+  cursor: default;
+}
+
+.dropdown-arrow {
+  font-size: 0.6rem;
+  margin-left: 2px;
+  opacity: 0.7;
+}
+
+.role-cell {
+  position: relative;
+  display: inline-block;
+}
+
+.role-dropdown {
+  position: fixed;
+  z-index: 2000;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  padding: 8px;
+  background: rgba(0, 0, 0, 0.8);
+  border: 1px solid rgba(255, 255, 255, 0.15);
+  border-radius: 10px;
+  box-shadow: 0 12px 32px rgba(0, 0, 0, 0.4);
+  backdrop-filter: blur(8px);
+  min-width: 140px;
+}
+
+.role-dropdown.open-up {
+  transform-origin: bottom left;
+}
+
+.role-option {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 6px 10px;
+  border: none;
+  border-radius: 6px;
+  background: rgba(255, 255, 255, 0.08);
+  color: rgba(255, 255, 255, 0.9);
+  font-size: 0.76rem;
+  font-weight: 600;
+  text-transform: capitalize;
+  cursor: pointer;
+  transition: background 0.15s, transform 0.1s;
+  white-space: nowrap;
+}
+
+.role-option:hover:not(:disabled) {
+  background: rgba(255, 255, 255, 0.15);
+  transform: translateX(2px);
+}
+
+.role-option:disabled {
+  opacity: 0.5;
+  cursor: default;
 }
 
 .role-user {
