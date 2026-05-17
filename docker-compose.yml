@@ -29,27 +29,11 @@ services:
       DATABASE_URL: postgres://app:app@db:5432/level_thumbnails
       BIND_ADDRESS: 0.0.0.0:3000
     volumes:
-      - appdata:/app
-      - type: bind
-        source: ./dist
-        target: /app/dist
-      - type: bind
-        source: ./migrations
-        target: /app/migrations
-      - type: bind
-        source: ./thumbnails
-        target: /app/thumbnails
-      - type: bind
-        source: ./uploads
-        target: /app/uploads
-      - type: bind
-        source: ./logs
-        target: /app/logs
+      - .:/app
     ports:
       - "3000:3000"
     restart: unless-stopped
 
 volumes:
   pgdata:
-  appdata:
 

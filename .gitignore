@@ -8,3 +8,5 @@
 /logs
 
 .env
+.env.docker
+state.json
