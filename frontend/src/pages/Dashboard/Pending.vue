@@ -392,7 +392,7 @@ function roleIcon(role: string) {
         <div class="card info-side">
           <span class="card-subtitle">Level Statistics</span>
           <p class="card-text">
-            <p v-if="isFinite(selectedItem!.note_data?.downloads || NaN)" class="card-stat-row">
+            <p v-if="selectedItem!.note_data && selectedItem!.note_data.downloads != null" class="card-stat-row">
               <span class="stat-row-label">
                 <img src="/icons/download.svg" alt="Download Icon" />
                 Downloads
@@ -401,7 +401,7 @@ function roleIcon(role: string) {
                 {{ selectedItem!.note_data!.downloads!.toLocaleString() }}<br/>
               </span>
             </p>
-            <p v-if="isFinite(selectedItem!.note_data?.likes || NaN)" class="card-stat-row">
+            <p v-if="selectedItem!.note_data && selectedItem!.note_data.likes != null" class="card-stat-row">
               <span class="stat-row-label">
                 <img src="/icons/like.svg" alt="Like Icon" />
                 Likes
@@ -434,7 +434,7 @@ function roleIcon(role: string) {
               </span>
             </p>
 
-            <p class="card-stat-row" v-if="selectedItem!.note_data?.attempt_time">
+            <p class="card-stat-row" v-if="selectedItem!.note_data && selectedItem!.note_data.attempt_time != null">
               <span class="stat-row-label">
                 <img src="/icons/timer.svg" alt="Clock Icon" />
                 Attempt Time
@@ -444,7 +444,7 @@ function roleIcon(role: string) {
               </span>
             </p>
   
-            <p class="card-stat-row" v-if="selectedItem!.note_data?.percentage">
+            <p class="card-stat-row" v-if="selectedItem!.note_data && selectedItem!.note_data.percentage != null">
               <span class="stat-row-label">
                 <img src="/icons/percent.svg" alt="Progress Icon" />
                 Progress
