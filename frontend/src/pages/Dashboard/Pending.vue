@@ -29,6 +29,9 @@ const pendingItems = ref<PendingItem[]>([]);
 const selectedItem = ref<PendingItem | null>(null);
 const totalItems = ref(0);
 
+const selectedItemFromDirectLink = ref(false);
+const directLinkLoading = ref(false);
+
 const rejectReasonField = ref<HTMLInputElement | null>(null);
 const rejectReason = ref<string>("");
 
@@ -50,6 +53,69 @@ const totalPages = computed(() => {
 });
 
 const paginatedItems = computed(() => pendingItems.value);
+
+function getPendingItemIdFromUrl() {
+  const rawId = new URL(window.location.href).searchParams.get('id');
+  if (!rawId) return null;
+
+  const parsedId = Number.parseInt(rawId, 10);
+  return Number.isInteger(parsedId) && parsedId > 0 ? parsedId : null;
+}
+
+function updatePendingItemUrl(itemId: number | null, replace = false) {
+  const url = new URL(window.location.href);
+
+  if (itemId === null) {
+    url.searchParams.delete('id');
+  } else {
+    url.searchParams.set('id', itemId.toString());
+  }
+
+  const state = itemId === null ? null : { pendingItemId: itemId };
+
+  if (replace) {
+    history.replaceState(state, '', url.toString());
+  } else {
+    history.pushState(state, '', url.toString());
+  }
+}
+
+async function fetchPendingItemById(id: number) {
+  const item = await fetchJson<PendingItem>(`/pending/${id}`);
+  item.note_data = parseSubmissionNote(item.submission_note);
+  return item;
+}
+
+async function openPendingItemById(id: number, fromDirectLink = false) {
+  if (fromDirectLink) {
+    directLinkLoading.value = true;
+  }
+
+  error.value = null;
+
+  try {
+    const existingItem = pendingItems.value.find(item => item.id === id);
+    const item = existingItem ?? await fetchPendingItemById(id);
+
+    if (!item.note_data) {
+      item.note_data = parseSubmissionNote(item.submission_note);
+    }
+
+    selectedItem.value = item;
+    selectedItemFromDirectLink.value = fromDirectLink;
+  } catch (err) {
+    selectedItem.value = null;
+    selectedItemFromDirectLink.value = false;
+
+    if (fromDirectLink) {
+      error.value = err instanceof Error ? err.message : 'Failed to load the linked pending item';
+    }
+  } finally {
+    if (fromDirectLink) {
+      directLinkLoading.value = false;
+    }
+  }
+}
 
 watch([filterLevelId, filterUsername], () => {
   currentPage.value = 1;
@@ -80,6 +146,12 @@ watch(currentPage, () => {
 
 watch(selectedItem, () => {
   rejectReason.value = "";
+});
+
+watch(selectedItem, (newItem) => {
+  if (newItem === null && getPendingItemIdFromUrl() !== null && !directLinkLoading.value) {
+    updatePendingItemUrl(null, true);
+  }
 });
 
 async function fetchPendingItems() {
@@ -128,23 +200,21 @@ async function fetchPendingItems() {
 
 onMounted(() => {
   fetchPendingItems();
+
+  const pendingItemId = getPendingItemIdFromUrl();
+  if (pendingItemId !== null) {
+    openPendingItemById(pendingItemId, true);
+  }
 });
 
 function handlePopState(ev: PopStateEvent) {
   const state = ev.state as any;
 
   if (state && typeof state.pendingItemId === 'number') {
-    const found = pendingItems.value.find(i => i.id === state.pendingItemId) || null;
-
-    if (found) {
-      selectedItem.value = found;
-    } else {
-      fetchPendingItems().then(() => {
-        selectedItem.value = pendingItems.value.find(i => i.id === state.pendingItemId) || null;
-      });
-    }
+    openPendingItemById(state.pendingItemId, false);
   } else {
     selectedItem.value = null;
+    selectedItemFromDirectLink.value = false;
   }
 }
 
@@ -154,6 +224,7 @@ onMounted(() => {
 
 onBeforeUnmount(() => {
   window.removeEventListener('popstate', handlePopState);
+  updatePendingItemUrl(null, true);
 });
 
 async function thumbnailAction(id: number, accept: boolean) {
@@ -219,18 +290,28 @@ function sanitizeLevelIdInput() {
 
 function openItem(item: PendingItem) {
   try {
-    history.pushState({pendingItemId: item.id}, "", window.location.href);
+    updatePendingItemUrl(item.id, false);
   } catch (e) {
     // ignore
   }
 
+  error.value = null;
   selectedItem.value = item;
+  selectedItemFromDirectLink.value = false;
 }
 
 function closeItem() {
+  if (selectedItemFromDirectLink.value) {
+    updatePendingItemUrl(null, true);
+    selectedItem.value = null;
+    selectedItemFromDirectLink.value = false;
+    return;
+  }
+
   try {
     history.back();
   } catch (e) {
+    updatePendingItemUrl(null, true);
     selectedItem.value = null;
   }
 }
@@ -257,7 +338,7 @@ function roleIcon(role: string) {
 </script>
 
 <template>
-  <div v-if="loading" class="d-flex flex-middle h-100">
+  <div v-if="loading || directLinkLoading" class="d-flex flex-middle h-100">
     <LoadingCircle/>
   </div>
   <div v-else>
