@@ -16,10 +16,10 @@ pub async fn admin_middleware(
 ) -> Result<database::User, Response> {
     match util::auth_middleware(headers, db).await {
         Ok(user) => {
-            if user.role == database::Role::Admin {
+            if user.role.can_manage_settings() {
                 Ok(user)
             } else {
-                Err(util::str_response(StatusCode::FORBIDDEN, "Admin privileges required"))
+                Err(util::str_response(StatusCode::FORBIDDEN, "Admin or Owner privileges required"))
             }
         }
         Err(resp) => Err(resp),
@@ -32,10 +32,10 @@ pub async fn mod_middleware(
 ) -> Result<database::User, Response> {
     match util::auth_middleware(headers, db).await {
         Ok(user) => {
-            if user.role == database::Role::Admin || user.role == database::Role::Moderator {
+            if user.role.can_moderate_pending_uploads() {
                 Ok(user)
             } else {
-                Err(util::str_response(StatusCode::FORBIDDEN, "Moderator or Admin privileges required"))
+                Err(util::str_response(StatusCode::FORBIDDEN, "Moderator, Admin, or Owner privileges required"))
             }
         }
         Err(resp) => Err(resp),
@@ -188,22 +188,12 @@ pub async fn update_user(
         Ok(current_user) => {
             match db.get_user_by_id(id).await {
                 Some(target_user) => {
-                    let rank = |r: &database::Role| match r {
-                        database::Role::User => 0,
-                        database::Role::Verified => 1,
-                        database::Role::Moderator => 2,
-                        database::Role::Admin => 3,
-                    };
-
-                    let current_rank = rank(&current_user.role);
-                    let target_rank = rank(&target_user.role);
-
-                    if current_rank <= target_rank {
+                    if !current_user.role.can_manage_user(target_user.role) {
                         return util::str_response(StatusCode::FORBIDDEN, "Insufficient privileges to modify this user");
                     }
 
                     if let Some(ref new_role) = payload.role {
-                        if current_rank <= rank(new_role) {
+                        if !current_user.role.can_assign_role(*new_role) {
                             return util::str_response(StatusCode::FORBIDDEN, "Insufficient privileges to assign the requested role");
                         }
                     }

@@ -7,13 +7,14 @@ import type { UserListResponse, UserRow } from '../../lib/types';
 
 type SortColumn = 'id' | 'username' | 'role' | 'total_uploads' | 'accepted' | 'pending' | 'rejected' | 'active_thumbnails';
 type SortDirection = 'asc' | 'desc';
-type UserRole = 'user' | 'verified' | 'moderator' | 'admin';
+type UserRole = 'user' | 'verified' | 'moderator' | 'admin' | 'owner';
 
 const ROLE_HIERARCHY: Record<UserRole, number> = {
   user: 0,
   verified: 1,
   moderator: 2,
   admin: 3,
+  owner: 4,
 };
 
 const loading = ref(true);
@@ -53,7 +54,7 @@ const totalPages = computed(() =>
 );
 
 function canManageRoles(): boolean {
-  return currentUserRole === 'moderator' || currentUserRole === 'admin';
+  return currentUserRole === 'moderator' || currentUserRole === 'admin' || currentUserRole === 'owner';
 }
 
 function getAvailableRolesForUser(user: UserRow): UserRole[] {
@@ -61,16 +62,17 @@ function getAvailableRolesForUser(user: UserRow): UserRole[] {
 
   const targetHierarchy = ROLE_HIERARCHY[user.role];
   const myHierarchy = ROLE_HIERARCHY[currentUserRole];
+  const isOwner = currentUserRole === 'owner';
 
-  if (targetHierarchy >= myHierarchy) return [];
+  if (!isOwner && targetHierarchy >= myHierarchy) return [];
 
   const availableRoles: UserRole[] = [];
-  const allRoles: UserRole[] = ['user', 'verified', 'moderator', 'admin'];
+  const allRoles: UserRole[] = ['user', 'verified', 'moderator', 'admin', 'owner'];
 
   for (const role of allRoles) {
     const roleHierarchy = ROLE_HIERARCHY[role];
 
-    if (roleHierarchy < myHierarchy && roleHierarchy !== targetHierarchy) {
+    if ((isOwner || roleHierarchy < myHierarchy) && roleHierarchy !== targetHierarchy) {
       availableRoles.push(role);
     }
   }
@@ -261,6 +263,7 @@ function roleIcon(role: UserRow['role']): string {
     verified: '/icons/verified-user.svg',
     moderator: '/icons/moderator.svg',
     admin: '/icons/admin.svg',
+    owner: '/icons/owner.svg',
   };
   return map[role];
 }
@@ -346,6 +349,7 @@ function handlePageInput() {
               <option value="verified">verified</option>
               <option value="moderator">moderator</option>
               <option value="admin">admin</option>
+              <option value="owner">owner</option>
             </select>
           </label>
           <label class="filter-label">
@@ -851,6 +855,11 @@ function handlePageInput() {
 .role-admin {
   background: rgba(255, 109, 109, 0.16);
   color: #ffb8b8;
+}
+
+.role-owner {
+  background: rgba(255, 193, 7, 0.18);
+  color: #ffe0a3;
 }
 
 .mono {

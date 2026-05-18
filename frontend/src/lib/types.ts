@@ -2,7 +2,7 @@ export interface UserStats {
   id: number;
   account_id: number;
   username: string;
-  role: 'user' | 'verified' | 'moderator' | 'admin';
+  role: 'user' | 'verified' | 'moderator' | 'admin' | 'owner';
   upload_count: number;
   accepted_upload_count: number;
   pending_upload_count: number;
@@ -77,7 +77,7 @@ export interface PendingItem {
   upload_time: string;
   submission_note: string | null;
   account_id: number | null;
-  user_role: 'user' | 'verified' | 'moderator' | 'admin';
+  user_role: 'user' | 'verified' | 'moderator' | 'admin' | 'owner';
   note_data: SubmissionNotesObject | null | undefined; // populated on load
 }
 
@@ -93,7 +93,7 @@ export interface UserRow {
   username: string;
   account_id: number;
   discord_id: string | null;
-  role: 'user' | 'verified' | 'moderator' | 'admin';
+  role: 'user' | 'verified' | 'moderator' | 'admin' | 'owner';
   total_uploads: number;
   accepted: number;
   pending: number;

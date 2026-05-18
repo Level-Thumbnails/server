@@ -91,6 +91,17 @@ pub struct AppState {
     pub settings: Arc<tokio::sync::RwLock<Settings>>,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub enum Permission {
+    DirectUploadNewThumbnail,
+    DirectUploadReplacement,
+    ModeratePendingUploads,
+    ManageUserProfiles,
+    ViewOtherUserHistory,
+    ManageLevelLocks,
+    ManageSettings,
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize, Serialize, sqlx::Type)]
 #[serde(rename_all = "lowercase")]
 #[sqlx(type_name = "TEXT", rename_all = "lowercase")]
@@ -99,6 +110,7 @@ pub enum Role {
     Verified,  // verified users can upload thumbnails without approval
     Moderator, // moderators can approve or reject uploads
     Admin,     // admins can manage users and uploads
+    Owner,     // superadmin with unrestricted access
 }
 
 impl std::fmt::Display for Role {
@@ -108,7 +120,83 @@ impl std::fmt::Display for Role {
             Role::Verified => write!(f, "verified"),
             Role::Moderator => write!(f, "moderator"),
             Role::Admin => write!(f, "admin"),
+            Role::Owner => write!(f, "owner"),
         }
+    }
+}
+
+impl Role {
+    pub const ORDERED: [Role; 5] =
+        [Role::User, Role::Verified, Role::Moderator, Role::Admin, Role::Owner];
+
+    pub fn rank(self) -> u8 {
+        match self {
+            Role::User => 0,
+            Role::Verified => 1,
+            Role::Moderator => 2,
+            Role::Admin => 3,
+            Role::Owner => 4,
+        }
+    }
+
+    pub fn has_permission(self, permission: Permission) -> bool {
+        match permission {
+            Permission::DirectUploadNewThumbnail => {
+                matches!(self, Role::Verified | Role::Moderator | Role::Admin | Role::Owner)
+            }
+            Permission::DirectUploadReplacement => {
+                matches!(self, Role::Moderator | Role::Admin | Role::Owner)
+            }
+            Permission::ModeratePendingUploads => {
+                matches!(self, Role::Moderator | Role::Admin | Role::Owner)
+            }
+            Permission::ManageUserProfiles => {
+                matches!(self, Role::Moderator | Role::Admin | Role::Owner)
+            }
+            Permission::ViewOtherUserHistory => {
+                matches!(self, Role::Moderator | Role::Admin | Role::Owner)
+            }
+            Permission::ManageLevelLocks => matches!(self, Role::Admin | Role::Owner),
+            Permission::ManageSettings => matches!(self, Role::Admin | Role::Owner),
+        }
+    }
+
+    pub fn can_manage_user(self, target: Role) -> bool {
+        self == Role::Owner
+            || (self.has_permission(Permission::ManageUserProfiles) && self.rank() > target.rank())
+    }
+
+    pub fn can_assign_role(self, target: Role) -> bool {
+        self == Role::Owner
+            || (self.has_permission(Permission::ManageUserProfiles) && self.rank() > target.rank())
+    }
+
+    pub fn can_bypass_level_locks(self) -> bool {
+        self.has_permission(Permission::ManageLevelLocks)
+    }
+
+    pub fn can_manage_level_locks(self) -> bool {
+        self.has_permission(Permission::ManageLevelLocks)
+    }
+
+    pub fn can_moderate_pending_uploads(self) -> bool {
+        self.has_permission(Permission::ModeratePendingUploads)
+    }
+
+    pub fn can_view_other_user_history(self) -> bool {
+        self.has_permission(Permission::ViewOtherUserHistory)
+    }
+
+    pub fn can_manage_settings(self) -> bool {
+        self.has_permission(Permission::ManageSettings)
+    }
+
+    pub fn can_upload_new_thumbnail_directly(self) -> bool {
+        self.has_permission(Permission::DirectUploadNewThumbnail)
+    }
+
+    pub fn can_upload_replacement_directly(self) -> bool {
+        self.has_permission(Permission::DirectUploadReplacement)
     }
 }
 
@@ -441,26 +529,36 @@ impl AppState {
             .ok()?
     }
 
-    pub async fn update_user(&self, id: i64, options: UpdateUserOptions) -> Result<User, sqlx::Error> {
+    pub async fn update_user(
+        &self,
+        id: i64,
+        options: UpdateUserOptions,
+    ) -> Result<User, sqlx::Error> {
         use sqlx::QueryBuilder;
 
         let mut builder = QueryBuilder::new("UPDATE users SET ");
         let mut first = true;
 
         if let Some(username) = options.username {
-            if !first { builder.push(", "); };
+            if !first {
+                builder.push(", ");
+            };
             builder.push("username = ").push_bind(username);
             first = false;
         }
 
         if let Some(account_id) = options.account_id {
-            if !first { builder.push(", "); };
+            if !first {
+                builder.push(", ");
+            };
             builder.push("account_id = ").push_bind(account_id);
             first = false;
         }
 
         if let Some(discord_opt) = options.discord_id {
-            if !first { builder.push(", "); };
+            if !first {
+                builder.push(", ");
+            };
             if let Some(discord_id) = discord_opt {
                 builder.push("discord_id = ").push_bind(discord_id);
             } else {
@@ -470,7 +568,9 @@ impl AppState {
         }
 
         if let Some(role) = options.role {
-            if !first { builder.push(", "); };
+            if !first {
+                builder.push(", ");
+            };
             builder.push("role = ").push_bind(role);
             first = false;
         }
@@ -684,9 +784,18 @@ impl AppState {
             UserListSortBy::DiscordId => {
                 builder.push("discord_id ").push(direction).push(" NULLS LAST")
             }
-            UserListSortBy::Role => builder
-                .push("CASE role WHEN 'user' THEN 0 WHEN 'verified' THEN 1 WHEN 'moderator' THEN 2 WHEN 'admin' THEN 3 END ")
-                .push(direction),
+            UserListSortBy::Role => {
+                builder.push("CASE role ");
+                for (rank, role) in Role::ORDERED.iter().copied().enumerate() {
+                    builder
+                        .push("WHEN ")
+                        .push_bind(role)
+                        .push(" THEN ")
+                        .push_bind(rank as i32)
+                        .push(" ");
+                }
+                builder.push("END ").push(direction)
+            }
             UserListSortBy::TotalUploads => builder.push("total_uploads ").push(direction),
             UserListSortBy::Accepted => builder.push("accepted ").push(direction),
             UserListSortBy::Pending => builder.push("pending ").push(direction),

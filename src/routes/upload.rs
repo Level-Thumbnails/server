@@ -34,10 +34,10 @@ async fn authenticate_moderator(
 ) -> Result<database::User, Response> {
     let user = util::auth_middleware(headers, db).await?;
 
-    if !matches!(user.role, database::Role::Moderator | database::Role::Admin) {
+    if !user.role.can_moderate_pending_uploads() {
         return Err(util::str_response(
             StatusCode::FORBIDDEN,
-            "Only moderators or admins can perform this action",
+            "Only moderators, admins, or owners can perform this action",
         ));
     }
 
@@ -50,8 +50,8 @@ async fn authenticate_admin(
 ) -> Result<database::User, Response> {
     let user = util::auth_middleware(headers, db).await?;
 
-    if user.role != database::Role::Admin {
-        return Err(util::str_response(StatusCode::FORBIDDEN, "Admin privileges required"));
+    if !user.role.can_manage_level_locks() {
+        return Err(util::str_response(StatusCode::FORBIDDEN, "Admin or Owner privileges required"));
     }
 
     Ok(user)
@@ -201,8 +201,8 @@ pub async fn upload(
         );
     }
 
-    // allow admins to bypass locks
-    if user.role != database::Role::Admin {
+    // allow admins and owners to bypass locks
+    if !user.role.can_bypass_level_locks() {
         match db.get_level_lock(id as i64).await {
             Ok(Some(lock)) => {
                 return util::response(
@@ -230,9 +230,19 @@ pub async fn upload(
         Err(e) => return util::str_response(StatusCode::BAD_REQUEST, &e),
     };
 
-    match user.role {
-        // Admins and moderators can upload and replace images directly
-        database::Role::Admin | database::Role::Moderator => {
+    if user.role.can_upload_replacement_directly() {
+        match force_save(id, &webp_data, submission_note.as_deref(), &user, &db).await {
+            Ok(_) => util::str_response(
+                StatusCode::CREATED,
+                &format!("Image for level ID {} uploaded", id),
+            ),
+            Err(e) => util::str_response(
+                StatusCode::INTERNAL_SERVER_ERROR,
+                &format!("Error saving image: {}", e),
+            ),
+        }
+    } else if user.role.can_upload_new_thumbnail_directly() {
+        if !is_image_uploaded(id).await {
             match force_save(id, &webp_data, submission_note.as_deref(), &user, &db).await {
                 Ok(_) => util::str_response(
                     StatusCode::CREATED,
@@ -243,31 +253,13 @@ pub async fn upload(
                     &format!("Error saving image: {}", e),
                 ),
             }
-        }
-
-        // Verified users can upload new images directly, but replacements need approval
-        database::Role::Verified => {
-            if !is_image_uploaded(id).await {
-                match force_save(id, &webp_data, submission_note.as_deref(), &user, &db).await {
-                    Ok(_) => util::str_response(
-                        StatusCode::CREATED,
-                        &format!("Image for level ID {} uploaded", id),
-                    ),
-                    Err(e) => util::str_response(
-                        StatusCode::INTERNAL_SERVER_ERROR,
-                        &format!("Error saving image: {}", e),
-                    ),
-                }
-            } else {
-                // Image exists, add to pending for approval
-                add_to_pending(id, &webp_data, submission_note.as_deref(), &user, &db).await
-            }
-        }
-
-        // Regular users must go through approval process
-        database::Role::User => {
+        } else {
+            // Image exists, add to pending for approval
             add_to_pending(id, &webp_data, submission_note.as_deref(), &user, &db).await
         }
+    } else {
+        // Regular users must go through approval process
+        add_to_pending(id, &webp_data, submission_note.as_deref(), &user, &db).await
     }
 }
 
@@ -348,9 +340,7 @@ async fn get_pending_uploads(
 
     match filter {
         PendingFilter::ByUser(user_id) => {
-            if user.id != user_id
-                && !matches!(user.role, database::Role::Moderator | database::Role::Admin)
-            {
+            if user.id != user_id && !user.role.can_moderate_pending_uploads() {
                 return util::str_response(
                     StatusCode::FORBIDDEN,
                     "You can only view your own pending uploads",

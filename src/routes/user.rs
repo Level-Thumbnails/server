@@ -72,7 +72,7 @@ pub async fn get_user_history(
 ) -> Response {
     match util::auth_middleware(&headers, &db).await {
         Ok(user) => {
-            if user.id == id || matches!(user.role, database::Role::Moderator | database::Role::Admin) {
+            if user.id == id || user.role.can_view_other_user_history() {
                 get_history_response(id, params.months.unwrap_or(12), &db).await
             } else {
                 util::str_response(StatusCode::FORBIDDEN, "Insufficient permissions")

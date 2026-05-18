@@ -4,7 +4,7 @@ export interface User {
     id: number;
     account_id: number;
     username: string;
-    role: 'user' | 'verified' | 'moderator' | 'admin';
+    role: 'user' | 'verified' | 'moderator' | 'admin' | 'owner';
     discord_id?: string | null;
 }
 

@@ -25,7 +25,11 @@ watch(isSidebarCollapsed, (value) => {
 });
 
 function hasPendingPerms() {
-  return user.value && (user.value.role === 'admin' || user.value.role === 'moderator');
+  return user.value && (
+      user.value.role === 'owner' ||
+      user.value.role === 'admin' ||
+      user.value.role === 'moderator'
+  );
 }
 
 const PAGES = [
