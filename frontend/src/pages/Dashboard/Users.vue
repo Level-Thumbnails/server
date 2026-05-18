@@ -151,6 +151,12 @@ function toggleRoleDropdown(user: UserRow, event: MouseEvent) {
 
 async function changeUserRole(userId: number, newRole: UserRole) {
   roleChangeLoading.value = userId;
+
+  if (!confirm(`Are you sure you want to change ${users.value.find(u => u.id === userId)?.username}'s role to "${newRole}"?`)) {
+    roleChangeLoading.value = null;
+    return;
+  }
+
   closeRoleDropdown();
 
   try {
