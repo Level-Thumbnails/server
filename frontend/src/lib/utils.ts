@@ -62,10 +62,19 @@ export function parseSubmissionNote(note: string | null): SubmissionNotesObject 
 
   if (!data.v || data.v !== '1') return null;
 
+  const safeDecode = (value?: string | null): string | null => {
+    if (value === undefined || value === null) return null;
+    try {
+      return decodeURIComponent(value);
+    } catch {
+      return value;
+    }
+  };
+
   return {
-    level_name: data.ln ? decodeURIComponent(data.ln) : null,
+    level_name: safeDecode(data.ln),
     creator_id: data.ci ? Number(data.ci) : null,
-    creator_name: data.cn || null,
+    creator_name: safeDecode(data.cn) || null,
     downloads: data.dw ? Number(data.dw) : null,
     likes: data.lk ? Number(data.lk) : null,
     stars: data.ls ? Number(data.ls) : null,
@@ -74,6 +83,6 @@ export function parseSubmissionNote(note: string | null): SubmissionNotesObject 
     difficulty: DIFFICULTY_NAMES[Number(data.ld)] || 'NA',
     percentage: data.pr ? Number(data.pr) : null,
     attempt_time: data.tm ? Number(data.tm) : null,
-    message: data.m ? decodeURIComponent(data.m) : null,
+    message: safeDecode(data.m),
   };
 }
