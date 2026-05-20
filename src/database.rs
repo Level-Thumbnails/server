@@ -36,6 +36,17 @@ const USER_STATS_CTE: &str = r#"WITH upload_counts AS (
         COUNT(*)::BIGINT AS active_thumbnails
     FROM latest_accepted_uploads
     GROUP BY user_id
+), active_bans AS (
+    SELECT DISTINCT ON (bans.user_id)
+        bans.user_id,
+        bans.ban_time,
+        bans.reason,
+        bans.expires_at,
+        banned_by.username AS banned_by_username
+    FROM bans
+    JOIN users AS banned_by ON banned_by.id = bans.banned_by
+    WHERE bans.expires_at IS NULL OR bans.expires_at > NOW()
+    ORDER BY bans.user_id, bans.ban_time DESC, bans.id DESC
 ), user_stats AS (
     SELECT
         users.id,
@@ -48,14 +59,15 @@ const USER_STATS_CTE: &str = r#"WITH upload_counts AS (
         COALESCE(upload_counts.pending, 0) AS pending,
         COALESCE(upload_counts.rejected, 0) AS rejected,
         COALESCE(active_counts.active_thumbnails, 0) AS active_thumbnails,
-        EXISTS (
-            SELECT 1 FROM bans
-            WHERE bans.user_id = users.id
-              AND (expires_at IS NULL OR expires_at > NOW())
-        ) AS banned
+        active_bans.ban_time AS ban_time,
+        active_bans.reason AS ban_reason,
+        active_bans.expires_at AS ban_expires_at,
+        active_bans.banned_by_username AS banned_by_username,
+        active_bans.user_id IS NOT NULL AS banned
     FROM users
     LEFT JOIN upload_counts ON upload_counts.user_id = users.id
     LEFT JOIN active_counts ON active_counts.user_id = users.id
+    LEFT JOIN active_bans ON active_bans.user_id = users.id
 )"#;
 
 fn serialize_discord_snowflake<S>(value: &Option<i64>, serializer: S) -> Result<S::Ok, S::Error>
@@ -349,6 +361,10 @@ pub struct AdminUserRow {
     pub rejected: i64,
     pub active_thumbnails: i64,
     pub banned: bool,
+    pub ban_time: Option<NaiveDateTime>,
+    pub ban_reason: Option<String>,
+    pub ban_expires_at: Option<NaiveDateTime>,
+    pub banned_by_username: Option<String>,
 }
 
 #[derive(Debug, Clone)]
@@ -896,7 +912,7 @@ impl AppState {
         options: AdminUserQueryOptions,
     ) -> Result<AdminUsersPage, sqlx::Error> {
         let data_query = format!(
-            "{} SELECT id, username, account_id, discord_id, role, total_uploads, accepted, pending, rejected, active_thumbnails, banned FROM user_stats WHERE TRUE",
+            "{} SELECT id, username, account_id, discord_id, role, total_uploads, accepted, pending, rejected, active_thumbnails, banned, ban_time, ban_reason, ban_expires_at, banned_by_username FROM user_stats WHERE TRUE",
             USER_STATS_CTE
         );
         let count_query = format!("{} SELECT COUNT(*) FROM user_stats WHERE TRUE", USER_STATS_CTE);

@@ -100,6 +100,10 @@ export interface UserRow {
   rejected: number;
   active_thumbnails: number;
   banned: boolean;
+  ban_time: string | null;
+  ban_reason: string | null;
+  ban_expires_at: string | null;
+  banned_by_username: string | null;
 }
 
 export interface UserListResponse {

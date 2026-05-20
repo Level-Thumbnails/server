@@ -39,6 +39,7 @@ const filterId = ref('');
 const filterAccountId = ref('');
 const filterDiscordId = ref('');
 const filterRole = ref('');
+const showBannedOnly = ref(false);
 
 const sortBy = ref<SortColumn>('id');
 const sortDirection = ref<SortDirection>('asc');
@@ -76,6 +77,8 @@ let debounceTimer: ReturnType<typeof setTimeout> | null = null;
 const totalPages = computed(() =>
   total.value === 0 ? 0 : Math.ceil(total.value / itemsPerPage.value)
 );
+
+const hasBannedUsers = computed(() => users.value.some((user) => user.banned));
 
 function canManageRoles(): boolean {
   return currentUserRole === 'moderator' || currentUserRole === 'admin' || currentUserRole === 'owner';
@@ -222,6 +225,7 @@ function buildParams(): URLSearchParams {
   if (filterAccountId.value.trim()) p.append('account_id', filterAccountId.value.trim());
   if (filterDiscordId.value.trim()) p.append('discord_id', filterDiscordId.value.trim());
   if (filterRole.value) p.append('role', filterRole.value);
+  if (showBannedOnly.value) p.append('banned', 'true');
   return p;
 }
 
@@ -249,7 +253,7 @@ function scheduleFetch() {
   debounceTimer = setTimeout(fetchUsers, 400);
 }
 
-watch([filterUsername, filterId, filterAccountId, filterDiscordId, filterRole], scheduleFetch);
+watch([filterUsername, filterId, filterAccountId, filterDiscordId, filterRole, showBannedOnly], scheduleFetch);
 watch(itemsPerPage, () => { currentPage.value = 1; fetchUsers(); });
 watch(currentPage, fetchUsers);
 
@@ -338,6 +342,18 @@ function handlePageInput() {
     currentPage.value = page;
     pageInput.value = '';
   }
+}
+
+function formatBanDate(value: string | null): string {
+  if (!value) return '—';
+
+  const normalized = value.includes('T') ? value : value.replace(' ', 'T');
+  const hasTimezone = /([zZ]|[+-]\d\d:?\d\d)$/.test(normalized);
+  const date = new Date(hasTimezone ? normalized : `${normalized}Z`);
+
+  if (Number.isNaN(date.getTime())) return value;
+
+  return date.toLocaleString();
 }
 
 function openBanModal(userId: number) {
@@ -489,6 +505,13 @@ async function unbanUser(userId: number) {
               <option value="owner">owner</option>
             </select>
           </label>
+          <label class="filter-label toggle-label">
+            <span>Banned users only</span>
+            <span class="toggle-switch">
+              <input v-model="showBannedOnly" type="checkbox" />
+              <span class="toggle-track" aria-hidden="true"></span>
+            </span>
+          </label>
           <label class="filter-label">
             Per page
             <select v-model.number="itemsPerPage" class="ctrl select">
@@ -543,6 +566,7 @@ async function unbanUser(userId: number) {
                   <img :src="sortIcon(col.key)" :class="['sort-icon', { active: sortBy === col.key }]" alt="" />
                 </button>
               </th>
+              <th v-if="hasBannedUsers">Ban Details</th>
               <th class="actions-th">Actions</th>
             </tr>
           </thead>
@@ -596,6 +620,16 @@ async function unbanUser(userId: number) {
               <td>{{ u.pending }}</td>
               <td>{{ u.rejected }}</td>
               <td>{{ u.active_thumbnails }}</td>
+
+              <td v-if="hasBannedUsers">
+                <div v-if="u.banned" class="ban-info">
+                  <div class="ban-info-line"><span class="ban-label">Reason:</span> {{ u.ban_reason || '—' }}</div>
+                  <div class="ban-info-line"><span class="ban-label">By:</span> {{ u.banned_by_username || '—' }}</div>
+                  <div class="ban-info-line"><span class="ban-label">Banned:</span> {{ formatBanDate(u.ban_time) }}</div>
+                  <div class="ban-info-line"><span class="ban-label">Expires:</span> {{ u.ban_expires_at ? formatBanDate(u.ban_expires_at) : 'Never' }}</div>
+                </div>
+                <span v-else class="ban-info-empty">—</span>
+              </td>
 
               <td class="actions-th">
                 <button
@@ -760,6 +794,71 @@ async function unbanUser(userId: number) {
   color: rgba(255, 255, 255, 0.8);
 }
 
+.toggle-label {
+  flex-direction: column;
+  align-items: flex-start;
+  justify-content: flex-start;
+  gap: 10px;
+  min-height: 0;
+}
+
+.toggle-switch {
+  position: relative;
+  display: inline-flex;
+  align-items: center;
+  flex-shrink: 0;
+  margin-left: 2px;
+}
+
+.toggle-switch input {
+  position: absolute;
+  opacity: 0;
+  width: 1px;
+  height: 1px;
+  margin: 0;
+  pointer-events: none;
+}
+
+.toggle-track {
+  position: relative;
+  width: 46px;
+  height: 26px;
+  border-radius: 999px;
+  background: rgba(255, 255, 255, 0.16);
+  border: 1px solid rgba(255, 255, 255, 0.14);
+  box-shadow: inset 0 1px 2px rgba(0, 0, 0, 0.2);
+  transition: background 0.18s ease, border-color 0.18s ease, box-shadow 0.18s ease;
+}
+
+.toggle-track::after {
+  content: '';
+  position: absolute;
+  top: 50%;
+  left: 3px;
+  width: 20px;
+  height: 20px;
+  border-radius: 50%;
+  background: #fff;
+  transform: translateY(-50%);
+  box-shadow: 0 2px 6px rgba(0, 0, 0, 0.28);
+  transition: transform 0.18s ease, background 0.18s ease;
+}
+
+.toggle-switch input:checked + .toggle-track {
+  background: rgba(78, 159, 255, 0.35);
+  border-color: rgba(78, 159, 255, 0.75);
+  box-shadow: inset 0 1px 2px rgba(0, 0, 0, 0.18), 0 0 0 3px rgba(78, 159, 255, 0.1);
+}
+
+.toggle-switch input:checked + .toggle-track::after {
+  transform: translate(20px, -50%);
+}
+
+.toggle-switch input:focus-visible + .toggle-track {
+  outline: none;
+  box-shadow: inset 0 1px 2px rgba(0, 0, 0, 0.18), 0 0 0 3px rgba(78, 159, 255, 0.22);
+}
+
 .ctrl {
   background: rgba(255, 255, 255, 0.07);
   color: #fff;
@@ -832,7 +931,7 @@ async function unbanUser(userId: number) {
 
 .users-table {
   width: 100%;
-  min-width: 760px;
+  min-width: 1080px;
   border-collapse: collapse;
 }
 
@@ -1056,6 +1155,30 @@ async function unbanUser(userId: number) {
 .actions-th {
   width: 120px;
   text-align: center;
+}
+
+.ban-info {
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+  max-width: 280px;
+  white-space: normal;
+  line-height: 1.35;
+}
+
+.ban-info-line {
+  font-size: 0.78rem;
+  color: rgba(255, 255, 255, 0.84);
+}
+
+.ban-label {
+  color: rgba(255, 255, 255, 0.56);
+  font-weight: 700;
+}
+
+.ban-info-empty {
+  color: rgba(255, 255, 255, 0.45);
+  font-size: 0.85rem;
 }
 
 .btn-sm {
