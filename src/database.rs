@@ -48,7 +48,11 @@ const USER_STATS_CTE: &str = r#"WITH upload_counts AS (
         COALESCE(upload_counts.pending, 0) AS pending,
         COALESCE(upload_counts.rejected, 0) AS rejected,
         COALESCE(active_counts.active_thumbnails, 0) AS active_thumbnails,
-        EXISTS (SELECT 1 FROM bans WHERE bans.user_id = users.id) AS banned
+        EXISTS (
+            SELECT 1 FROM bans
+            WHERE bans.user_id = users.id
+              AND (expires_at IS NULL OR expires_at > NOW())
+        ) AS banned
     FROM users
     LEFT JOIN upload_counts ON upload_counts.user_id = users.id
     LEFT JOIN active_counts ON active_counts.user_id = users.id
@@ -282,6 +286,15 @@ pub struct UserStats {
     pub level_count: i64,
     pub accepted_level_count: i64,
     pub active_thumbnail_count: i64,
+}
+
+#[derive(FromRow, Serialize, Deserialize)]
+pub struct UserBan {
+    pub id: i64,
+    pub user_id: i64,
+    pub ban_time: NaiveDateTime,
+    pub reason: String,
+    pub expires_at: Option<NaiveDateTime>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize, Serialize)]
@@ -1134,6 +1147,60 @@ impl AppState {
         )
         .fetch_one(&*self.pool)
         .await
+    }
+
+    pub async fn get_user_ban(&self, user_id: i64) -> Result<Option<UserBan>, sqlx::Error> {
+        sqlx::query_as::<_, UserBan>(
+            "SELECT id, user_id, ban_time, reason, expires_at
+             FROM bans
+             WHERE user_id = $1 AND (expires_at IS NULL OR expires_at > NOW())
+             ORDER BY ban_time DESC
+             LIMIT 1",
+        )
+        .bind(user_id)
+        .fetch_optional(&*self.pool)
+        .await
+    }
+
+    pub async fn ban_user(
+        &self,
+        user_id: i64,
+        reason: String,
+        banned_by: i64,
+        expires_at: Option<NaiveDateTime>
+    ) -> Result<(), sqlx::Error> {
+        sqlx::query(
+            "INSERT INTO bans (user_id, reason, banned_by, expires_at)
+             VALUES ($1, $2, $3, $4)",
+        )
+        .bind(user_id)
+        .bind(reason)
+        .bind(banned_by)
+        .bind(expires_at)
+        .execute(&*self.pool)
+        .await?;
+
+        Ok(())
+    }
+
+    pub async fn unban_user(&self, user_id: i64) -> Result<bool, sqlx::Error> {
+        let result = sqlx::query(
+            "UPDATE bans
+             SET expires_at = NOW()
+             FROM (
+               SELECT id AS bid
+               FROM bans
+               WHERE user_id = $1 AND (expires_at IS NULL OR expires_at > NOW())
+               ORDER BY ban_time DESC
+               LIMIT 1
+             ) sel
+             WHERE bans.id = sel.bid",
+        )
+        .bind(user_id)
+        .execute(&*self.pool)
+        .await?;
+
+        Ok(result.rows_affected() > 0)
     }
 }
 

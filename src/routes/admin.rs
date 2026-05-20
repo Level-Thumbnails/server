@@ -287,3 +287,77 @@ pub async fn delete_thumbnail(
         Err(resp) => resp,
     }
 }
+
+#[derive(Deserialize, Debug)]
+pub struct BanUserPayload {
+    pub reason: String,
+    pub expires_by: Option<chrono::DateTime<chrono::Utc>>,
+}
+
+pub async fn ban_user(
+    headers: HeaderMap,
+    State(db): State<database::AppState>,
+    Path(id): Path<i64>,
+    Json(payload): Json<BanUserPayload>,
+) -> Response {
+    match mod_middleware(&headers, &db).await {
+        Ok(current_user) => {
+            match db.get_user_by_id(id).await {
+                Some(target_user) => {
+                    if !current_user.role.can_manage_user(target_user.role) {
+                        return util::str_response(StatusCode::FORBIDDEN, "Insufficient privileges to ban this user");
+                    }
+
+                    match db.ban_user(
+                        id, payload.reason,
+                        current_user.id,
+                        payload.expires_by.map(|dt| dt.naive_utc())
+                    ).await {
+                        Ok(_) => util::str_response(StatusCode::OK, "User banned successfully"),
+                        Err(e) => util::str_response(
+                            StatusCode::INTERNAL_SERVER_ERROR,
+                            &format!("Failed to ban user: {}", e),
+                        ),
+                    }
+                }
+                None => util::str_response(StatusCode::NOT_FOUND, "User not found"),
+            }
+        }
+        Err(resp) => resp,
+    }
+}
+
+pub async fn unban_user(
+    headers: HeaderMap,
+    State(db): State<database::AppState>,
+    Path(id): Path<i64>,
+) -> Response {
+    match mod_middleware(&headers, &db).await {
+        Ok(current_user) => {
+            match db.get_user_by_id(id).await {
+                Some(target_user) => {
+                    if !current_user.role.can_manage_user(target_user.role) {
+                        return util::str_response(StatusCode::FORBIDDEN, "Insufficient privileges to unban this user");
+                    }
+
+                    match db.unban_user(id).await {
+                        Ok(changed) => {
+                            if changed {
+                                util::str_response(StatusCode::OK, "User unbanned successfully")
+                            } else {
+                                util::str_response(StatusCode::NOT_FOUND, "No active ban found for this user")
+                            }
+                        }
+                        Err(e) => util::str_response(
+                            StatusCode::INTERNAL_SERVER_ERROR,
+                            &format!("Failed to unban user: {}", e),
+                        ),
+                    }
+                }
+                None => util::str_response(StatusCode::NOT_FOUND, "User not found"),
+            }
+        }
+        Err(resp) => resp,
+    }
+}
+

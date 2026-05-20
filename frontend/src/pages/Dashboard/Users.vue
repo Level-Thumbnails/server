@@ -1,9 +1,11 @@
 <script setup lang="ts">
 import { computed, onBeforeUnmount, onMounted, ref, watch } from 'vue';
 import LoadingCircle from '../../components/LoadingCircle.vue';
+import Modal from '../../components/Modal.vue';
 import { fetchJson, unwrap } from '../../lib/utils';
 import SessionManager from '../../managers/session';
 import type { UserListResponse, UserRow } from '../../lib/types';
+import type { ModalButton } from '../../components/Modal.vue';
 
 type SortColumn = 'id' | 'username' | 'role' | 'total_uploads' | 'accepted' | 'pending' | 'rejected' | 'active_thumbnails';
 type SortDirection = 'asc' | 'desc';
@@ -46,6 +48,28 @@ const roleChangeLoading = ref<number | null>(null);
 const openRoleDropdown = ref<number | null>(null);
 const openRoleDropdownUp = ref(false);
 const roleDropdownPosition = ref<{ top: number; left: number; width: number } | null>(null);
+
+const banModalOpen = ref(false);
+const banModalUserId = ref<number | null>(null);
+const banReason = ref('');
+const banExpiryDate = ref('');
+const banExpiryTime = ref('');
+const banLoading = ref(false);
+
+const banModalButtons = computed<ModalButton[]>(() => [
+  {
+    label: 'Cancel',
+    variant: 'secondary',
+    disabled: banLoading.value,
+  },
+  {
+    label: banLoading.value ? 'Banning...' : 'Ban User',
+    variant: 'danger',
+    disabled: banLoading.value || !banReason.value.trim(),
+    loading: banLoading.value,
+  },
+]);
+
 let copiedTimer: ReturnType<typeof setTimeout> | null = null;
 let debounceTimer: ReturnType<typeof setTimeout> | null = null;
 
@@ -308,6 +332,106 @@ function handlePageInput() {
     pageInput.value = '';
   }
 }
+
+function openBanModal(userId: number) {
+  banModalUserId.value = userId;
+  banModalOpen.value = true;
+  banReason.value = '';
+  banExpiryDate.value = '';
+  banExpiryTime.value = '';
+}
+
+function closeBanModal() {
+  banModalOpen.value = false;
+  banModalUserId.value = null;
+  banReason.value = '';
+  banExpiryDate.value = '';
+  banExpiryTime.value = '';
+  banLoading.value = false;
+}
+
+async function handleBanAction(actionIndex: number) {
+  if (actionIndex === 0) {
+    closeBanModal();
+    return;
+  }
+
+  if (!banModalUserId.value || !banReason.value.trim()) {
+    alert('Please provide a ban reason');
+    return;
+  }
+
+  const user = users.value.find(u => u.id === banModalUserId.value);
+  if (!user) return;
+
+  if (!confirm(`Are you sure you want to ban ${user.username}?`)) {
+    return;
+  }
+
+  banLoading.value = true;
+
+  try {
+    let expiresBy = null;
+    if (banExpiryDate.value) {
+      const expiryDateTime = new Date(`${banExpiryDate.value}T${banExpiryTime.value || '00:00'}:00Z`);
+      expiresBy = expiryDateTime.toISOString();
+    }
+
+    await fetchJson(`/admin/ban/${banModalUserId.value}`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        reason: banReason.value.trim(),
+        expires_by: expiresBy,
+      }),
+    });
+
+    const index = users.value.findIndex(u => u.id === banModalUserId.value);
+    if (index !== -1) {
+      users.value[index].banned = true;
+    }
+
+    closeBanModal();
+    alert('User banned successfully');
+    fetchUsers();
+  } catch (err) {
+    const message = err instanceof Error ? err.message : 'Failed to ban user';
+    alert(`Error: ${message}`);
+  } finally {
+    banLoading.value = false;
+  }
+}
+
+async function unbanUser(userId: number) {
+  const user = users.value.find(u => u.id === userId);
+  if (!user) return;
+
+  if (!confirm(`Are you sure you want to unban ${user.username}?`)) {
+    return;
+  }
+
+  banLoading.value = true;
+
+  try {
+    await fetchJson(`/admin/ban/${userId}`, {
+      method: 'DELETE',
+      headers: { 'Content-Type': 'application/json' },
+    });
+
+    const index = users.value.findIndex(u => u.id === userId);
+    if (index !== -1) {
+      users.value[index].banned = false;
+    }
+
+    alert('User unbanned successfully');
+    fetchUsers();
+  } catch (err) {
+    const message = err instanceof Error ? err.message : 'Failed to unban user';
+    alert(`Error: ${message}`);
+  } finally {
+    banLoading.value = false;
+  }
+}
 </script>
 
 <template>
@@ -422,6 +546,7 @@ function handlePageInput() {
               <td>
                 <div class="user-cell">
                   <span class="username">{{ u.username }}</span>
+                  <div v-if="u.banned" class="ban-badge" title="This user is banned">Banned</div>
                   <div class="meta-icons">
                     <button v-if="u.account_id !== -1" class="icon-btn" :title="`GD account ID: ${u.account_id}`"
                       @click="copyToClipboard(String(u.account_id), `account:${u.id}`)">
@@ -466,7 +591,17 @@ function handlePageInput() {
               <td>{{ u.active_thumbnails }}</td>
 
               <td class="actions-th">
-                <button class="btn btn-dark btn-sm" disabled>—</button>
+                <button
+                  v-if="canManageRoles()"
+                  class="btn btn-sm"
+                  :class="u.banned ? 'btn-secondary' : 'btn-danger'"
+                  :disabled="banLoading && banModalUserId === u.id"
+                  @click="u.banned ? unbanUser(u.id) : openBanModal(u.id)"
+                  :title="u.banned ? 'Unban this user' : 'Ban this user'"
+                >
+                  <img :src="u.banned ? '/icons/cancel.svg' : '/icons/ban.svg'" alt="" class="icon-sm" />
+                </button>
+                <button v-else class="btn btn-dark btn-sm" disabled>—</button>
               </td>
             </tr>
           </tbody>
@@ -492,6 +627,45 @@ function handlePageInput() {
           </button>
         </div>
       </Teleport>
+
+      <Modal
+        :open="banModalOpen"
+        :title="`Ban ${users.find(u => u.id === banModalUserId)?.username || 'User'}`"
+        :buttons="banModalButtons"
+        @close="closeBanModal"
+        @action="handleBanAction"
+      >
+        <label class="form-label">
+          Ban Reason
+          <textarea
+            v-model="banReason"
+            class="ctrl textarea"
+            placeholder="Enter the reason for banning this user"
+            rows="3"
+            :disabled="banLoading"
+          />
+        </label>
+
+        <label class="form-label">
+          Expiry Date (Optional)
+          <input
+            v-model="banExpiryDate"
+            type="date"
+            class="ctrl"
+            :disabled="banLoading"
+          />
+        </label>
+
+        <label v-if="banExpiryDate" class="form-label">
+          Expiry Time
+          <input
+            v-model="banExpiryTime"
+            type="time"
+            class="ctrl"
+            :disabled="banLoading"
+          />
+        </label>
+      </Modal>
 
     </template>
   </div>
@@ -901,6 +1075,60 @@ function handlePageInput() {
   width: 18px;
   height: 18px;
   object-fit: contain;
+}
+
+.ban-badge {
+  display: inline-block;
+  margin-left: 6px;
+  padding: 2px 6px;
+  background: rgba(255, 109, 109, 0.2);
+  color: #ffb8b8;
+  font-size: 0.7rem;
+  font-weight: 700;
+  border-radius: 4px;
+  white-space: nowrap;
+}
+
+.btn-danger {
+  background: rgba(255, 109, 109, 0.15);
+  color: #ffb8b8;
+  border: 1px solid rgba(255, 109, 109, 0.3);
+}
+
+.btn-danger:not(:disabled):hover {
+  background: rgba(255, 109, 109, 0.25);
+  border-color: rgba(255, 109, 109, 0.5);
+}
+
+.btn-secondary {
+  background: rgba(255, 255, 255, 0.07);
+  color: rgba(255, 255, 255, 0.9);
+  border: 1px solid rgba(255, 255, 255, 0.1);
+}
+
+.btn-secondary:not(:disabled):hover {
+  background: rgba(255, 255, 255, 0.1);
+  border-color: rgba(255, 255, 255, 0.2);
+}
+
+.btn-dark {
+  background: rgba(0, 0, 0, 0.3);
+  color: rgba(255, 255, 255, 0.7);
+  border: 1px solid rgba(255, 255, 255, 0.05);
+}
+
+.form-label {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  font-size: 0.9rem;
+  font-weight: 500;
+  color: rgba(255, 255, 255, 0.85);
+}
+
+.textarea {
+  resize: vertical;
+  font-family: inherit;
 }
 
 @media (max-width: 640px) {

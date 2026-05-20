@@ -7,6 +7,7 @@ use axum::http::{HeaderMap, StatusCode, header};
 use axum::response::Response;
 use serde::{Deserialize, Serialize};
 use std::cmp::PartialEq;
+use serde_json::json;
 use webp::Encoder;
 
 const IMAGE_WIDTH: u32 = 1920;
@@ -169,6 +170,44 @@ pub async fn upload(
     let user = match util::auth_middleware(&headers, &db).await {
         Ok(user) => user,
         Err(response) => return response,
+    };
+
+    match db.get_user_ban(user.id).await {
+        Ok(Some(ban)) => {
+            return if let Some(expires_at) = ban.expires_at {
+                util::response(
+                    StatusCode::FORBIDDEN,
+                    json!({
+                        "status": StatusCode::FORBIDDEN.as_u16(),
+                        // TODO: remove the reason from message once the mod actually reads the "reason" field
+                        "message": format!(
+                            "You are banned from uploading thumbnails until {}. Reason: {}",
+                            expires_at.format("%Y-%m-%d %H:%M:%S").to_string(),
+                            ban.reason
+                        ),
+                        "reason": ban.reason,
+                        "expires_at": expires_at,
+                    }),
+                )
+            } else {
+                util::response(
+                    StatusCode::FORBIDDEN,
+                    json!({
+                        "status": StatusCode::FORBIDDEN.as_u16(),
+                        // TODO: remove the reason from message once the mod actually reads the "reason" field
+                        "message": format!("You are banned from uploading thumbnails. Reason: {}", ban.reason),
+                        "reason": ban.reason,
+                    }),
+                )
+            }
+        }
+        Ok(None) => (),
+        Err(e) => {
+            return util::str_response(
+                StatusCode::INTERNAL_SERVER_ERROR,
+                &format!("Failed to check user ban status: {}", e),
+            );
+        }
     };
 
     match util::parse_useragent(&headers) {
