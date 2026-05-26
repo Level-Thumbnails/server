@@ -1,6 +1,8 @@
 import { RATING_NAMES, DIFFICULTY_NAMES, LENGTH_NAMES } from './types';
 import type { SubmissionNotesObject } from './types';
 
+const ENGLISH_LOCALE = 'en-US';
+
 export function unwrap<T>(payload: unknown): T {
   if (payload && typeof payload === 'object' && 'data' in payload) {
     return (payload as { data: T }).data;
@@ -25,26 +27,38 @@ export async function fetchJson<T = unknown>(url: string, init?: RequestInit): P
 
 export function formatMonth(period: string) {
   const date = new Date(`${period}T00:00:00`);
-  return Number.isNaN(date.getTime())
-    ? period.slice(0, 7)
-    : date.toLocaleString(undefined, { month: 'short', year: '2-digit' });
+  if (Number.isNaN(date.getTime())) return period.slice(0, 7);
+
+  const currentYear = new Date().getFullYear();
+  const includeYear = date.getFullYear() !== currentYear;
+
+  return date.toLocaleString(ENGLISH_LOCALE, {
+    month: 'short',
+    ...(includeYear ? { year: 'numeric' as const } : {}),
+  });
 }
 
 export function formatHour(timestamp: string) {
   const date = new Date(timestamp);
   return Number.isNaN(date.getTime())
     ? timestamp.slice(11, 16)
-    : date.toLocaleTimeString(undefined, { hour: '2-digit', minute: '2-digit' });
+    : date.toLocaleTimeString(ENGLISH_LOCALE, { hour: '2-digit', minute: '2-digit', hour12: false });
 }
 
 export function formatDateTime(timestamp: string) {
   const date = new Date(timestamp);
   if (Number.isNaN(date.getTime())) return timestamp;
-  return date.toLocaleString(undefined, {
+
+  const currentYear = new Date().getFullYear();
+  const includeYear = date.getFullYear() !== currentYear;
+
+  return date.toLocaleString(ENGLISH_LOCALE, {
     month: 'short',
     day: 'numeric',
+    ...(includeYear ? { year: 'numeric' as const } : {}),
     hour: '2-digit',
     minute: '2-digit',
+    hour12: false,
   });
 }
 
