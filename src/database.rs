@@ -246,12 +246,19 @@ pub struct UploadExtended {
     pub accepted_by_username: Option<String>,
 }
 
-#[derive(Debug, Clone, FromRow, Serialize, Deserialize)]
+/// Represents a lock on a specific level, preventing new thumbnail uploads for that level until the lock is removed.
+#[derive(Debug, Clone, FromRow, Serialize, Deserialize, utoipa::ToSchema)]
 pub struct LevelLock {
+    /// ID of the level that is locked
     pub level_id: i64,
+    /// ID of the admin who locked the level
     pub locked_by: i64,
+    /// Username of the admin who locked the level
     pub locked_by_username: String,
+    /// Timestamp when the level was locked
+    #[schema(value_type = String, format = DateTime)]
     pub locked_at: NaiveDateTime,
+    /// Optional reason provided by the admin for locking the level
     pub reason: Option<String>,
 }
 
@@ -414,16 +421,27 @@ pub struct AdminUsersPage {
     pub total: i64,
 }
 
-#[derive(Debug, Clone, FromRow, Serialize, Deserialize)]
+/// Represents a snapshot of various statistics about the thumbnail repository at a specific point in time.
+#[derive(Debug, Clone, FromRow, Serialize, Deserialize, utoipa::ToSchema)]
 pub struct StatsSnapshot {
+    /// Unique identifier for this snapshot
     pub id: i64,
+    /// Timestamp when the snapshot was taken
+    #[schema(value_type = String, format = DateTime)]
     pub captured_at: NaiveDateTime,
+    /// Total storage used by all thumbnails in bytes
     pub storage_bytes: i64,
+    /// Total number of unique thumbnails stored on the server
     pub thumbnails_count: i64,
+    /// Number of unique users (IPs) that have accessed any endpoint on the server in the past 30 days. (Uses Cloudflare data, may not be perfectly accurate)
     pub users_per_month: Option<i64>,
+    /// Total number of registered users
     pub users_total: i64,
+    /// Total number of uploads (including accepted, rejected, and pending) that the server has processed
     pub uploads_total: i64,
+    /// Number of uploads in pending review
     pub pending_uploads_total: i64,
+    /// Total number of accepted uploads (including ones that got replaced later)
     pub accepted_uploads_total: i64,
 }
 

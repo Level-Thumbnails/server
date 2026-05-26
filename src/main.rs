@@ -8,6 +8,9 @@ use tower_http::services::{ServeDir, ServeFile};
 use tracing::{info, warn};
 use tracing_appender::rolling::{RollingFileAppender, Rotation};
 use tracing_subscriber::filter::EnvFilter;
+use utoipa::{Modify, OpenApi};
+use utoipa::openapi::security::{HttpAuthScheme, HttpBuilder, SecurityScheme, ApiKey, ApiKeyValue};
+use utoipa_swagger_ui::SwaggerUi;
 
 mod auth;
 mod cache_controller;
@@ -16,6 +19,71 @@ mod routes;
 mod util;
 
 use routes::{admin, login, stats, thumbnail, upload, user};
+
+struct SecurityAddon;
+
+impl Modify for SecurityAddon {
+    fn modify(&self, openapi: &mut utoipa::openapi::OpenApi) {
+        let components = openapi.components.as_mut().unwrap();
+
+        components.add_security_scheme(
+            "bearerAuth",
+            SecurityScheme::Http(
+                HttpBuilder::new()
+                    .scheme(HttpAuthScheme::Bearer)
+                    .bearer_format("JWT")
+                    .description(Some("User token passed via Authorization header."))
+                    .build(),
+            ),
+        );
+
+        components.add_security_scheme(
+            "cookieAuth",
+            SecurityScheme::ApiKey(
+                ApiKey::Cookie(ApiKeyValue::with_description("auth_token", "User token passed via auth_token cookie."))
+            ),
+        );
+    }
+}
+
+#[derive(OpenApi)]
+#[openapi(
+    info(
+        title = "Level Thumbnails API",
+        version = "1.0.0",
+        description = "API / Dashboard for Level Thumbnails, a Geometry Dash mod that adds image previews to levels in-game.",
+        license(name = "Apache-2.0", url = "https://www.apache.org/licenses/LICENSE-2.0.html")
+    ),
+    paths(
+        stats::get_stats,
+        stats::get_stats_history,
+        upload::get_all_level_locks,
+        upload::lock_level,
+    ),
+    components(
+        schemas(
+            util::MessageResponse,
+
+            // stats
+            stats::ServerStats,
+            stats::StatsResponse,
+            database::StatsSnapshot,
+            stats::StatsHistoryResponse,
+
+            // upload
+            database::LevelLock,
+            upload::AllLevelLocksResponse,
+            upload::LockLevelPayload,
+            upload::LevelLockResponse
+        )
+    ),
+    modifiers(&SecurityAddon),
+    tags(
+        (name = "Server Status", description = "Fetching overall server statistics."),
+        (name = "Level Locking", description = "Locking and unlocking levels for thumbnail uploads.")
+    )
+)]
+struct ApiDoc;
 
 #[tokio::main]
 async fn main() {
@@ -101,6 +169,7 @@ async fn main() {
         .route("/admin/ban/{id}", delete(admin::unban_user))
         // .route("/admin/user/{id}", get(admin::get_user_by_id))
         .route("/admin/thumbnail/{id}", delete(admin::delete_thumbnail))
+        .merge(SwaggerUi::new("/swagger").url("/api-docs/openapi.json", ApiDoc::openapi()))
         .with_state(db)
         .layer(cors)
         .layer(DefaultBodyLimit::disable())

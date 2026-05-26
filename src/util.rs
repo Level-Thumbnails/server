@@ -2,6 +2,7 @@ use crate::auth::UserSession;
 use crate::database;
 use axum::http::{HeaderMap, StatusCode, header};
 use axum::response::Response;
+use serde::Serialize;
 use serde_json::json;
 
 pub fn response(status: StatusCode, body: serde_json::Value) -> Response {
@@ -11,6 +12,15 @@ pub fn response(status: StatusCode, body: serde_json::Value) -> Response {
         .header(header::CACHE_CONTROL, "no-store")
         .body(body.to_string().into())
         .unwrap()
+}
+
+/// A simple response type for returning a status code and message in the response body. Useful for error responses.
+#[derive(Debug, Serialize, utoipa::ToSchema)]
+pub struct MessageResponse {
+    /// HTTP status code of the response
+    pub status: u16,
+    /// A human-readable message describing the result of the request
+    pub message: String,
 }
 
 pub fn str_response(status: StatusCode, message: &str) -> Response {

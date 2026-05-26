@@ -1,4 +1,5 @@
 use crate::routes::thumbnail;
+use crate::util::MessageResponse;
 use crate::{cache_controller, database, util};
 use axum::Json;
 use axum::body::Bytes;
@@ -6,8 +7,8 @@ use axum::extract::{Path, Query, State};
 use axum::http::{HeaderMap, StatusCode, header};
 use axum::response::Response;
 use serde::{Deserialize, Serialize};
-use std::cmp::PartialEq;
 use serde_json::json;
+use std::cmp::PartialEq;
 use webp::Encoder;
 
 const IMAGE_WIDTH: u32 = 1920;
@@ -17,12 +18,13 @@ const MAX_PENDING_PAGE_SIZE: u32 = 100;
 const MAX_SUBMISSION_NOTE_LENGTH: usize = 500;
 const SUBMISSION_NOTE_HEADER: &str = "x-submission-note";
 
-#[derive(Debug, Deserialize, Default)]
+#[derive(Debug, Deserialize, Default, utoipa::ToSchema)]
 pub struct LockLevelPayload {
+    /// Optional reason for locking the level. Displayed to users who attempt to upload thumbnails for the locked level.
     pub reason: Option<String>,
 }
 
-#[derive(Debug, Serialize)]
+#[derive(Debug, Serialize, utoipa::ToSchema)]
 pub struct LevelLockResponse {
     pub locked: bool,
     pub lock: Option<database::LevelLock>,
@@ -52,7 +54,10 @@ async fn authenticate_admin(
     let user = util::auth_middleware(headers, db).await?;
 
     if !user.role.can_manage_level_locks() {
-        return Err(util::str_response(StatusCode::FORBIDDEN, "Admin or Owner privileges required"));
+        return Err(util::str_response(
+            StatusCode::FORBIDDEN,
+            "Admin or Owner privileges required",
+        ));
     }
 
     Ok(user)
@@ -199,7 +204,7 @@ pub async fn upload(
                         "reason": ban.reason,
                     }),
                 )
-            }
+            };
         }
         Ok(None) => (),
         Err(e) => {
@@ -218,14 +223,16 @@ pub async fn upload(
                     &format!(
                         "Your Level Thumbnails version ({}) is outdated. Please update to the latest version to upload thumbnails.",
                         ua.version
-                    )
+                    ),
                 );
             }
-        },
-        None => return util::str_response(
-            StatusCode::UPGRADE_REQUIRED,
-            "Your game version is not supported. Please update Geometry Dash and install the latest version of Level Thumbnails mod.",
-        ),
+        }
+        None => {
+            return util::str_response(
+                StatusCode::UPGRADE_REQUIRED,
+                "Your game version is not supported. Please update Geometry Dash and install the latest version of Level Thumbnails mod.",
+            );
+        }
     };
 
     let submission_note = match parse_submission_note(&headers) {
@@ -234,10 +241,7 @@ pub async fn upload(
     };
 
     if submission_note.is_none() {
-        return util::str_response(
-            StatusCode::BAD_REQUEST,
-            "Missing submission note.",
-        );
+        return util::str_response(StatusCode::BAD_REQUEST, "Missing submission note.");
     }
 
     // allow admins and owners to bypass locks
@@ -576,7 +580,10 @@ pub async fn get_pending_image(
     };
 
     if user.id != upload.user_id && !user.role.can_moderate_pending_uploads() {
-        return util::str_response(StatusCode::FORBIDDEN, "You can only view your own pending uploads");
+        return util::str_response(
+            StatusCode::FORBIDDEN,
+            "You can only view your own pending uploads",
+        );
     }
 
     let image_path = format!("uploads/{}_{}.webp", upload.user_id, upload.level_id);
@@ -602,10 +609,7 @@ pub async fn get_pending_image(
         .unwrap()
 }
 
-pub async fn get_level_lock(
-    State(db): State<database::AppState>,
-    Path(id): Path<i64>,
-) -> Response {
+pub async fn get_level_lock(State(db): State<database::AppState>, Path(id): Path<i64>) -> Response {
     match db.get_level_lock(id).await {
         Ok(lock) => util::response(
             StatusCode::OK,
@@ -618,6 +622,49 @@ pub async fn get_level_lock(
     }
 }
 
+#[utoipa::path(
+    post,
+    path = "/thumbnail/{id}/lock",
+    description = "Locks submissions indefinitely for a specified level. Requires admin or higher permissions.",
+    tag = "Level Locking",
+    security(("bearerAuth" = []), ("cookieAuth" = [])),
+    params(
+        ("id" = i64, Path, description = "Geometry Dash Level ID")
+    ),
+    request_body = LockLevelPayload,
+    responses(
+        (
+            status = 200,
+            description = "Level successfully locked",
+            body = MessageResponse,
+            example = json!({"status": 200, "message": "Level 12345 is now locked for submissions"})
+        ),
+        (
+            status = 401,
+            description = "Missing or invalid authentication",
+            body = MessageResponse,
+            example = json!({"status": 401, "message": "Missing Authorization header"})
+        ),
+        (
+            status = 403,
+            description = "Admin or Owner privileges required",
+            body = MessageResponse,
+            example = json!({"status": 403, "message": "Admin or Owner privileges required"})
+        ),
+        (
+            status = 498,
+            description = "Invalid token (user not found)",
+            body = MessageResponse,
+            example = json!({"status": 498, "message": "User not found"})
+        ),
+        (
+            status = 500,
+            description = "Internal server error",
+            body = MessageResponse,
+            example = json!({"status": 500, "message": "Failed to lock level 12345: database error"})
+        ),
+    )
+)]
 pub async fn lock_level(
     headers: HeaderMap,
     State(db): State<database::AppState>,
@@ -663,6 +710,62 @@ pub async fn unlock_level(
     }
 }
 
+#[derive(Serialize, utoipa::ToSchema)]
+pub struct AllLevelLocksResponse {
+    /// HTTP status code of the response
+    pub status: u16,
+    /// A list of all currently locked levels, including their lock reason and timestamp
+    pub locks: Vec<database::LevelLock>,
+}
+
+#[utoipa::path(
+    get,
+    path = "/thumbnail/locks",
+    description = "Get all currently locked levels with their lock reason and timestamp. Requires admin or higher permissions.",
+    tag = "Level Locking",
+    security(("bearerAuth" = []), ("cookieAuth" = [])),
+    responses(
+        (
+            status = 200,
+            description = "Successful response with list of locked levels",
+            body = AllLevelLocksResponse,
+            example = json!({
+                "locks": [{
+                    "level_id": 2,
+                    "locked_at": "2026-03-12T20:25:43.350067",
+                    "locked_by": 4393,
+                    "locked_by_username": "prevter",
+                    "reason": "preventing vandalism of main levels"
+                }],
+                "status": 200
+            })
+        ),
+        (
+            status = 401,
+            description = "Missing or invalid authentication",
+            body = MessageResponse,
+            example = json!({"status": 401, "message": "Missing Authorization header"})
+        ),
+        (
+            status = 403,
+            description = "Admin or Owner privileges required",
+            body = MessageResponse,
+            example = json!({"status": 403, "message": "Admin or Owner privileges required"})
+        ),
+        (
+            status = 498,
+            description = "Invalid token (user not found)",
+            body = MessageResponse,
+            example = json!({"status": 498, "message": "User not found"})
+        ),
+        (
+            status = 500,
+            description = "Internal server error",
+            body = MessageResponse,
+            example = json!({"status": 500, "message": "Failed to fetch locked levels: database error"})
+        ),
+    )
+)]
 pub async fn get_all_level_locks(
     headers: HeaderMap,
     State(db): State<database::AppState>,
@@ -674,7 +777,8 @@ pub async fn get_all_level_locks(
     match db.get_all_level_locks().await {
         Ok(locks) => util::response(
             StatusCode::OK,
-            serde_json::json!({
+            json!({
+                "status": StatusCode::OK.as_u16(),
                 "locks": locks,
             }),
         ),
