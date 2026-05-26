@@ -560,7 +560,7 @@ pub async fn get_pending_image(
     State(db): State<database::AppState>,
     Path(id): Path<i64>,
 ) -> Response {
-    let _user = match authenticate_moderator(&headers, &db).await {
+    let user = match util::auth_middleware(&headers, &db).await {
         Ok(user) => user,
         Err(response) => return response,
     };
@@ -574,6 +574,10 @@ pub async fn get_pending_image(
             );
         }
     };
+
+    if user.id != upload.user_id && !user.role.can_moderate_pending_uploads() {
+        return util::str_response(StatusCode::FORBIDDEN, "You can only view your own pending uploads");
+    }
 
     let image_path = format!("uploads/{}_{}.webp", upload.user_id, upload.level_id);
     let image_data = match tokio::fs::read(&image_path).await {
