@@ -470,11 +470,15 @@ pub async fn get_pending_info(
     };
 
     match db.get_pending_upload(id).await {
-        Ok(upload) => Response::builder()
-            .status(StatusCode::OK)
-            .header(header::CONTENT_TYPE, "application/json")
-            .body(serde_json::to_string(&upload).unwrap().into())
-            .unwrap(),
+        Ok(mut upload) => {
+            upload.replacement = is_image_uploaded(upload.level_id as u64).await;
+
+            Response::builder()
+                .status(StatusCode::OK)
+                .header(header::CONTENT_TYPE, "application/json")
+                .body(serde_json::to_string(&upload).unwrap().into())
+                .unwrap()
+        },
         Err(e) => util::str_response(
             StatusCode::NOT_FOUND,
             &format!("No pending upload found with ID {}: {}", id, e),
