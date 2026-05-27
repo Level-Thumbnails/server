@@ -58,7 +58,9 @@ impl Modify for SecurityAddon {
         stats::get_stats,
         stats::get_stats_history,
         upload::get_all_level_locks,
+        upload::get_level_lock,
         upload::lock_level,
+        upload::unlock_level
     ),
     components(
         schemas(

@@ -24,13 +24,16 @@ pub struct LockLevelPayload {
     pub reason: Option<String>,
 }
 
+/// Response type for the GET /thumbnail/{id}/lock endpoint
 #[derive(Debug, Serialize, utoipa::ToSchema)]
 pub struct LevelLockResponse {
-    pub locked: bool,
-    pub lock: Option<database::LevelLock>,
+    /// HTTP status code of the response
+    pub status: u16,
+    /// Level lock information. Null if the level is not currently locked.
+    pub data: Option<database::LevelLock>,
 }
 
-// Helper function to authenticate moderator/admin
+/// Helper function to authenticate moderator/admin
 async fn authenticate_moderator(
     headers: &HeaderMap,
     db: &database::AppState,
@@ -613,11 +616,43 @@ pub async fn get_pending_image(
         .unwrap()
 }
 
+#[utoipa::path(
+    get,
+    path = "/thumbnail/{id}/lock",
+    description = "Get the lock status of a level.",
+    tag = "Level Locking",
+    params(
+        ("id" = i64, Path, description = "Geometry Dash Level ID")
+    ),
+    responses(
+        (
+            status = 200,
+            description = "Successful response with list of locked levels",
+            body = LevelLockResponse,
+            example = json!({
+                "data": {
+                    "level_id": 2,
+                    "locked_at": "2026-03-12T20:25:43.350067",
+                    "locked_by": 4393,
+                    "locked_by_username": "prevter",
+                    "reason": "preventing vandalism of main levels"
+                },
+                "status": 200
+            })
+        ),
+        (
+            status = 500,
+            description = "Internal server error",
+            body = MessageResponse,
+            example = json!({"status": 500, "message": "Failed to fetch level lock: database error"})
+        ),
+    )
+)]
 pub async fn get_level_lock(State(db): State<database::AppState>, Path(id): Path<i64>) -> Response {
     match db.get_level_lock(id).await {
         Ok(lock) => util::response(
             StatusCode::OK,
-            serde_json::to_value(LevelLockResponse { locked: lock.is_some(), lock }).unwrap(),
+            serde_json::to_value(LevelLockResponse { status: 200, data: lock }).unwrap(),
         ),
         Err(e) => util::str_response(
             StatusCode::INTERNAL_SERVER_ERROR,
@@ -692,6 +727,54 @@ pub async fn lock_level(
     }
 }
 
+#[utoipa::path(
+    delete,
+    path = "/thumbnail/{id}/lock",
+    description = "Unlocks submissions for a specified level if they were locked. Requires admin or higher permissions.",
+    tag = "Level Locking",
+    security(("bearerAuth" = []), ("cookieAuth" = [])),
+    params(
+        ("id" = i64, Path, description = "Geometry Dash Level ID")
+    ),
+    responses(
+        (
+            status = 200,
+            description = "Level successfully locked",
+            body = MessageResponse,
+            example = json!({"status": 200, "message": "Level 12345 is now unlocked for submissions"})
+        ),
+        (
+            status = 401,
+            description = "Missing or invalid authentication",
+            body = MessageResponse,
+            example = json!({"status": 401, "message": "Missing Authorization header"})
+        ),
+        (
+            status = 403,
+            description = "Admin or Owner privileges required",
+            body = MessageResponse,
+            example = json!({"status": 403, "message": "Admin or Owner privileges required"})
+        ),
+        (
+            status = 404,
+            description = "Level lock not found",
+            body = MessageResponse,
+            example = json!({"status": 404, "message": "Level lock not found"})
+        ),
+        (
+            status = 498,
+            description = "Invalid token (user not found)",
+            body = MessageResponse,
+            example = json!({"status": 498, "message": "User not found"})
+        ),
+        (
+            status = 500,
+            description = "Internal server error",
+            body = MessageResponse,
+            example = json!({"status": 500, "message": "Failed to unlock level 12345: database error"})
+        ),
+    )
+)]
 pub async fn unlock_level(
     headers: HeaderMap,
     State(db): State<database::AppState>,
