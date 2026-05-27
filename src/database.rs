@@ -234,15 +234,27 @@ pub struct UploadInfo {
     pub username: String,
 }
 
-#[derive(FromRow, Serialize, Deserialize)]
+/// Detailed information about a thumbnail upload
+#[derive(FromRow, Serialize, Deserialize, utoipa::ToSchema)]
 pub struct UploadExtended {
+    /// ID of the level associated with this upload
     pub level_id: i64,
+    /// Geometry Dash account ID of the user who made the upload
     pub account_id: i64,
+    /// Username of the user who made the upload
     pub username: String,
+    /// Timestamp when the upload was made
+    #[schema(value_type = String, format = DateTime)]
     pub upload_time: NaiveDateTime,
+    /// Timestamp of the first accepted upload for this level (may be the same as upload_time if this is the first accepted upload)
+    #[schema(value_type = String, format = DateTime)]
     pub first_upload_time: NaiveDateTime,
+    /// Timestamp when this upload was accepted
+    #[schema(value_type = String, format = DateTime)]
     pub accepted_time: Option<NaiveDateTime>,
+    /// Geometry Dash account ID of the admin who accepted this upload, if applicable
     pub accepted_by: Option<i64>,
+    /// Username of the admin who accepted this upload, if applicable
     pub accepted_by_username: Option<String>,
 }
 

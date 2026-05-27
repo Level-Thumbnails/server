@@ -5,19 +5,25 @@ use axum::response::Response;
 use image::ImageReader;
 use serde::{Deserialize, Serialize};
 use std::path::PathBuf;
+use serde_json::json;
 use tracing::warn;
 use webp::Encoder;
+use crate::util::MessageResponse;
 
 const CACHE_DIR: &str = "thumbnails/cache";
 
-#[derive(Deserialize, Serialize, Debug, Clone, Copy)]
+/// Thumbnail resolution options
+#[derive(Deserialize, Serialize, Debug, Clone, Copy, utoipa::ToSchema)]
 pub enum Res {
+    /// High resolution thumbnail (1920x1080)
     #[serde(rename = "high")]
-    High, // 1920x1080
+    High,
+    /// Medium resolution thumbnail (1280x720)
     #[serde(rename = "medium")]
-    Medium, // 1280x720
+    Medium,
+    /// Low resolution thumbnail (640x360)
     #[serde(rename = "small")]
-    Small, // 640x360
+    Small,
 }
 
 impl Res {
@@ -169,6 +175,36 @@ async fn handle_image(id: u64, res: Res, db: database::AppState) -> Response {
     }
 }
 
+#[utoipa::path(
+    get,
+    path = "/thumbnail/{id}/{res}",
+    description = "Returns the thumbnail image for the specified Geometry Dash level ID with requested resolution.",
+    tag = "Thumbnails",
+    params(
+        ("id" = u64, Path, description = "Geometry Dash level ID"),
+        ("res" = Res, Path, description = "Thumbnail resolution: high, medium, or small"),
+    ),
+    responses(
+        (
+            status = 200,
+            description = "Thumbnail image in WebP format",
+            content_type = "image/webp",
+            body = Vec<u8>
+        ),
+        (
+            status = 404,
+            description = "Image not found",
+            body = MessageResponse,
+            example = json!({"status": 404, "message": "Image not found"})
+        ),
+        (
+            status = 500,
+            description = "Internal server error",
+            body = MessageResponse,
+            example = json!({"status": 500, "message": "Failed to read image file: <error details>"})
+        )
+    )
+)]
 pub async fn image_handler_with_res(
     Path((id, res)): Path<(u64, Res)>,
     State(db): State<database::AppState>,
@@ -176,6 +212,35 @@ pub async fn image_handler_with_res(
     handle_image(id, res, db).await
 }
 
+#[utoipa::path(
+    get,
+    path = "/thumbnail/{id}",
+    description = "Returns the thumbnail image for the specified Geometry Dash level ID in high resolution (1920x1080).",
+    tag = "Thumbnails",
+    params(
+        ("id" = u64, Path, description = "Geometry Dash level ID")
+    ),
+    responses(
+        (
+            status = 200,
+            description = "Thumbnail image in WebP format",
+            content_type = "image/webp",
+            body = Vec<u8>
+        ),
+        (
+            status = 404,
+            description = "Image not found",
+            body = MessageResponse,
+            example = json!({"status": 404, "message": "Image not found"})
+        ),
+        (
+            status = 500,
+            description = "Internal server error",
+            body = MessageResponse,
+            example = json!({"status": 500, "message": "Failed to read image file: <error details>"})
+        )
+    )
+)]
 pub async fn image_handler_default(
     Path(id): Path<u64>,
     State(db): State<database::AppState>,
@@ -183,6 +248,38 @@ pub async fn image_handler_default(
     handle_image(id, Res::High, db).await
 }
 
+#[utoipa::path(
+    get,
+    path = "/thumbnail/{id}/info",
+    description = "Returns metadata about the thumbnail image for the specified Geometry Dash level ID",
+    tag = "Thumbnails",
+    params(
+        ("id" = u64, Path, description = "Geometry Dash level ID")
+    ),
+    responses(
+        (
+            status = 200,
+            description = "Thumbnail metadata in JSON format",
+            body = database::UploadExtended,
+            example = json!({
+                "level_id": 1,
+                "account_id": 9598348,
+                "username": "Aardvark04",
+                "upload_time": "2026-03-11T22:00:18.225970",
+                "first_upload_time": "2024-03-24T22:59:29",
+                "accepted_time": "2026-03-11T22:00:18.225970",
+                "accepted_by": 9598348,
+                "accepted_by_username": "Aardvark04"
+            }),
+        ),
+        (
+            status = 404,
+            description = "Image not found",
+            body = MessageResponse,
+            example = json!({"status": 404, "message": "Image not found"})
+        )
+    )
+)]
 pub async fn thumbnail_info_handler(
     Path(id): Path<u64>,
     State(db): State<database::AppState>,
@@ -230,10 +327,67 @@ pub async fn handle_random(res: Res) -> Response {
     }
 }
 
+#[utoipa::path(
+    get,
+    path = "/thumbnail/random",
+    description = "Redirects to a random thumbnail image in high resolution (1920x1080).",
+    tag = "Thumbnails",
+    responses(
+        (
+            status = 302,
+            description = "Redirect to a random thumbnail image",
+            headers(
+                ("Location" = String, description = "URL of the random thumbnail image")
+            )
+        ),
+        (
+            status = 404,
+            description = "No images found",
+            body = MessageResponse,
+            example = json!({"status": 404, "message": "No images found"})
+        ),
+        (
+            status = 500,
+            description = "Internal server error",
+            body = MessageResponse,
+            example = json!({"status": 500, "message": "Failed to get thumbnails: <error details>"})
+        )
+    )
+)]
 pub async fn random_handler() -> Response {
     handle_random(Res::High).await
 }
 
+#[utoipa::path(
+    get,
+    path = "/thumbnail/random/{res}",
+    description = "Redirects to a random thumbnail image in the specified resolution.",
+    tag = "Thumbnails",
+    params(
+        ("res" = Res, Path, description = "Thumbnail resolution: high, medium, or small"),
+    ),
+    responses(
+        (
+            status = 302,
+            description = "Redirect to a random thumbnail image",
+            headers(
+                ("Location" = String, description = "URL of the random thumbnail image")
+            )
+        ),
+        (
+            status = 404,
+            description = "No images found",
+            body = MessageResponse,
+            example = json!({"status": 404, "message": "No images found"})
+        ),
+        (
+            status = 500,
+            description = "Internal server error",
+            body = MessageResponse,
+            example = json!({"status": 500, "message": "Failed to get thumbnails: <error details>"})
+        )
+    )
+)]
 pub async fn random_res_handler(Path(res): Path<Res>) -> Response {
     handle_random(res).await
 }

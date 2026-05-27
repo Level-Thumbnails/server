@@ -57,6 +57,11 @@ impl Modify for SecurityAddon {
     paths(
         stats::get_stats,
         stats::get_stats_history,
+        thumbnail::image_handler_default,
+        thumbnail::image_handler_with_res,
+        thumbnail::thumbnail_info_handler,
+        thumbnail::random_handler,
+        thumbnail::random_res_handler,
         upload::get_all_level_locks,
         upload::get_level_lock,
         upload::lock_level,
@@ -72,6 +77,10 @@ impl Modify for SecurityAddon {
             database::StatsSnapshot,
             stats::StatsHistoryResponse,
 
+            // thumbnails
+            thumbnail::Res,
+            database::UploadExtended,
+
             // upload
             database::LevelLock,
             upload::AllLevelLocksResponse,
@@ -82,6 +91,7 @@ impl Modify for SecurityAddon {
     modifiers(&SecurityAddon),
     tags(
         (name = "Server Status", description = "Fetching overall server statistics."),
+        (name = "Thumbnails", description = "Fetching thumbnail images and metadata."),
         (name = "Level Locking", description = "Locking and unlocking levels for thumbnail uploads.")
     )
 )]
