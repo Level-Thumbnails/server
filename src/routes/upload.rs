@@ -136,7 +136,7 @@ async fn add_to_pending(
     if db.settings.read().await.pause_submissions {
         return util::str_response(
             StatusCode::SERVICE_UNAVAILABLE,
-            "Thumbnail submissions are temporarily disabled",
+            "Thumbnail submissions are currently closed because there are too many submissions. Please wait for thumbnail moderators to clear the queue, and then submissions will reopen.",
         );
     }
 
