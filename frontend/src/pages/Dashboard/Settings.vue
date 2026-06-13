@@ -11,9 +11,7 @@ const loadingToken = ref(false);
 const linkingError = ref("");
 
 function hasServerSettingsPerms() {
-  return user &&
-      ((user as unknown as User).role === 'admin' ||
-       (user as unknown as User).role === 'owner');
+  return user.value && (user.value.role === 'admin' || user.value.role === 'owner');
 }
 
 function downloadMyData() {
