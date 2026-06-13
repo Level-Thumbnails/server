@@ -10,12 +10,12 @@ use serde::{Deserialize, Serialize};
 use serde_json::json;
 use std::cmp::PartialEq;
 use webp::Encoder;
+use database::NoteData;
 
 const IMAGE_WIDTH: u32 = 1920;
 const IMAGE_HEIGHT: u32 = 1080;
 const DEFAULT_PENDING_PAGE_SIZE: u32 = 24;
 const MAX_PENDING_PAGE_SIZE: u32 = 100;
-const MAX_SUBMISSION_NOTE_LENGTH: usize = 500;
 const SUBMISSION_NOTE_HEADER: &str = "x-submission-note";
 
 #[derive(Debug, Deserialize, Default, utoipa::ToSchema)]
@@ -83,35 +83,11 @@ fn process_image(data: &[u8]) -> Result<Vec<u8>, String> {
     Ok(encoder.encode_lossless().to_owned())
 }
 
-fn parse_submission_note(headers: &HeaderMap) -> Result<Option<String>, Response> {
-    let Some(value) = headers.get(SUBMISSION_NOTE_HEADER) else {
-        return Ok(None);
-    };
-
-    let value = value.to_str().map_err(|_| {
-        util::str_response(StatusCode::BAD_REQUEST, "Submission note must be valid UTF-8")
-    })?;
-
-    let trimmed = value.trim();
-    if trimmed.is_empty() {
-        return Ok(None);
-    }
-
-    if trimmed.chars().count() > MAX_SUBMISSION_NOTE_LENGTH {
-        return Err(util::str_response(
-            StatusCode::BAD_REQUEST,
-            &format!("Submission note is too long (max {} characters)", MAX_SUBMISSION_NOTE_LENGTH),
-        ));
-    }
-
-    Ok(Some(trimmed.to_string()))
-}
-
 // Handler for uploading images for admins/moderators (and verified for new thumbnails)
 async fn force_save(
     id: u64,
     image_data: &[u8],
-    submission_note: Option<&str>,
+    submission_note: NoteData,
     user: &database::User,
     db: &database::AppState,
 ) -> Result<(), String> {
@@ -133,7 +109,7 @@ async fn force_save(
 async fn add_to_pending(
     id: u64,
     image_data: &[u8],
-    submission_note: Option<&str>,
+    submission_note: NoteData,
     user: &database::User,
     db: &database::AppState,
 ) -> Response {
@@ -222,7 +198,16 @@ pub async fn upload(
         }
     };
 
-    match util::parse_useragent(&headers) {
+    let Some(value) = headers.get(SUBMISSION_NOTE_HEADER) else {
+        return util::str_response(StatusCode::BAD_REQUEST, "Missing submission note header");
+    };
+
+    let submission_note = match util::parse_submission_note(value.to_str().unwrap_or_default()) {
+        Ok(note) => note,
+        Err(response) => return util::str_response(StatusCode::BAD_REQUEST, &response),
+    };
+
+    let note = match util::parse_useragent(&headers) {
         Some(ua) => {
             if db.settings.read().await.min_supported_client.is_newer_than(&ua.version) {
                 return util::str_response(
@@ -233,6 +218,7 @@ pub async fn upload(
                     ),
                 );
             }
+            NoteData::from_parsed(submission_note, ua)
         }
         None => {
             return util::str_response(
@@ -242,22 +228,13 @@ pub async fn upload(
         }
     };
 
-    let submission_note = match parse_submission_note(&headers) {
-        Ok(note) => note,
-        Err(response) => return response,
-    };
-
-    if submission_note.is_none() {
-        return util::str_response(StatusCode::BAD_REQUEST, "Missing submission note.");
-    }
-
     // allow admins and owners to bypass locks
     if !user.role.can_bypass_level_locks() {
         match db.get_level_lock(id as i64).await {
             Ok(Some(lock)) => {
                 return util::response(
                     StatusCode::LOCKED,
-                    serde_json::json!({
+                    json!({
                         "status": 423,
                         "message": "Thumbnail submissions are locked for this level",
                         "reason": lock.reason
@@ -281,7 +258,7 @@ pub async fn upload(
     };
 
     if user.role.can_upload_replacement_directly() {
-        match force_save(id, &webp_data, submission_note.as_deref(), &user, &db).await {
+        match force_save(id, &webp_data, note, &user, &db).await {
             Ok(_) => util::str_response(
                 StatusCode::CREATED,
                 &format!("Image for level ID {} uploaded", id),
@@ -293,7 +270,7 @@ pub async fn upload(
         }
     } else if user.role.can_upload_new_thumbnail_directly() {
         if !is_image_uploaded(id).await {
-            match force_save(id, &webp_data, submission_note.as_deref(), &user, &db).await {
+            match force_save(id, &webp_data, note, &user, &db).await {
                 Ok(_) => util::str_response(
                     StatusCode::CREATED,
                     &format!("Image for level ID {} uploaded", id),
@@ -305,11 +282,11 @@ pub async fn upload(
             }
         } else {
             // Image exists, add to pending for approval
-            add_to_pending(id, &webp_data, submission_note.as_deref(), &user, &db).await
+            add_to_pending(id, &webp_data, note, &user, &db).await
         }
     } else {
         // Regular users must go through approval process
-        add_to_pending(id, &webp_data, submission_note.as_deref(), &user, &db).await
+        add_to_pending(id, &webp_data, note, &user, &db).await
     }
 }
 

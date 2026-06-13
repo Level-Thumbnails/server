@@ -4,7 +4,7 @@ import LoadingCircle from "../../components/LoadingCircle.vue";
 import ImageDiffer from "../../components/ImageDiffer.vue";
 import DifficultyFace from "../../components/DifficultyFace.vue";
 import type { PendingItem, PendingResponse } from "../../lib/types";
-import { fetchJson, parseSubmissionNote } from "../../lib/utils";
+import { fetchJson } from "../../lib/utils";
 import { alertModal } from "../../lib/modals";
 
 const REJECT_PRESETS = [
@@ -82,9 +82,7 @@ function updatePendingItemUrl(itemId: number | null, replace = false) {
 }
 
 async function fetchPendingItemById(id: number) {
-  const item = await fetchJson<PendingItem>(`/pending/${id}`);
-  item.note_data = parseSubmissionNote(item.submission_note);
-  return item;
+  return await fetchJson<PendingItem>(`/pending/${id}`);
 }
 
 async function openPendingItemById(id: number, fromDirectLink = false) {
@@ -97,10 +95,6 @@ async function openPendingItemById(id: number, fromDirectLink = false) {
   try {
     const existingItem = pendingItems.value.find(item => item.id === id);
     const item = existingItem ?? await fetchPendingItemById(id);
-
-    if (!item.note_data) {
-      item.note_data = parseSubmissionNote(item.submission_note);
-    }
 
     selectedItem.value = item;
     selectedItemFromDirectLink.value = fromDirectLink;
@@ -183,10 +177,6 @@ async function fetchPendingItems() {
     }
 
     const data = await fetchJson<PendingResponse>(`/pending?${params.toString()}`);
-    for (const item of data.uploads) {
-      item.note_data = parseSubmissionNote(item.submission_note);
-    }
-
     pendingItems.value = data.uploads;
     totalItems.value = data.total;
   } catch (err) {

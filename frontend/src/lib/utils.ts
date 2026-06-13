@@ -1,6 +1,3 @@
-import { RATING_NAMES, DIFFICULTY_NAMES, LENGTH_NAMES } from './types';
-import type { SubmissionNotesObject } from './types';
-
 const ENGLISH_LOCALE = 'en-US';
 
 export function unwrap<T>(payload: unknown): T {
@@ -60,43 +57,4 @@ export function formatDateTime(timestamp: string) {
     minute: '2-digit',
     hour12: false,
   });
-}
-
-export function parseSubmissionNote(note: string | null): SubmissionNotesObject | null {
-  if (!note) return null;
-
-  const parts = note.split(';');
-  const data: Record<string, string> = {};
-  for (const part of parts) {
-    const [key, ...rest] = part.split('=');
-    if (key && rest.length > 0 && data[key] === undefined) {
-      data[key] = rest.join('=');
-    }
-  }
-
-  if (!data.v || data.v !== '1') return null;
-
-  const safeDecode = (value?: string | null): string | null => {
-    if (value === undefined || value === null) return null;
-    try {
-      return decodeURIComponent(value);
-    } catch {
-      return value;
-    }
-  };
-
-  return {
-    level_name: safeDecode(data.ln),
-    creator_id: data.ci ? Number(data.ci) : null,
-    creator_name: safeDecode(data.cn) || null,
-    downloads: data.dw ? Number(data.dw) : null,
-    likes: data.lk ? Number(data.lk) : null,
-    stars: data.ls ? Number(data.ls) : null,
-    length: LENGTH_NAMES[Number(data.ll)] || null,
-    rating: RATING_NAMES[Number(data.lr)] || 'NA',
-    difficulty: DIFFICULTY_NAMES[Number(data.ld)] || 'NA',
-    percentage: data.pr ? Number(data.pr) : null,
-    attempt_time: data.tm ? Number(data.tm) : null,
-    message: safeDecode(data.m),
-  };
 }

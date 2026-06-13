@@ -8,7 +8,7 @@ import type {
   PendingItem,
   MyUploadsSummaryResponse,
 } from '../../lib/types';
-import { fetchJson, formatDateTime, parseSubmissionNote, unwrap } from '../../lib/utils';
+import { fetchJson, formatDateTime, unwrap } from '../../lib/utils';
 
 type ThumbnailTab = 'active' | 'pending' | 'rejected';
 
@@ -48,23 +48,12 @@ const activeTotalPages = computed(() => totalPages(activeTotal.value));
 const pendingTotalPages = computed(() => totalPages(pendingTotal.value));
 const rejectedTotalPages = computed(() => totalPages(rejectedTotal.value));
 
-function levelTitle(note: string | null, levelId: number): string {
-  const parsed = parseSubmissionNote(note);
-  if (parsed?.level_name && parsed.level_name.trim().length > 0) {
-    return parsed.level_name;
-  }
-
-  return `ID: ${levelId}`;
+function levelTitle(level: MyThumbnailActiveItem | PendingItem | MyThumbnailRejectedItem): string {
+  return level.note_data?.level_name || `ID: ${level.level_id}`;
 }
 
-function levelAuthor(note: string | null): string | null {
-  const parsed = parseSubmissionNote(note);
-  return parsed?.creator_name && parsed.creator_name.trim().length > 0 ? parsed.creator_name : null;
-}
-
-function hasStructuredLevelData(note: string | null): boolean {
-  const parsed = parseSubmissionNote(note);
-  return !!(parsed?.level_name && parsed.level_name.trim().length > 0);
+function levelAuthor(level: MyThumbnailActiveItem | PendingItem | MyThumbnailRejectedItem): string | null {
+  return level.note_data?.creator_name || null;
 }
 
 function sameTimestamp(first: string | null, second: string | null): boolean {
@@ -323,16 +312,16 @@ onMounted(() => {
           <button
             type="button"
             class="thumbnail-link"
-            @click="openPreview(getActiveFullImageUrl(item.level_id), levelTitle(item.submission_note, item.level_id))"
+            @click="openPreview(getActiveFullImageUrl(item.level_id), levelTitle(item))"
           >
             <img :src="getActiveImageUrl(item.level_id)" :alt="`Level ${item.level_id}`" class="thumbnail-image" loading="lazy" />
           </button>
           <div class="thumbnail-content">
             <strong class="level-heading">
-              {{ levelTitle(item.submission_note, item.level_id) }}
-              <span v-if="levelAuthor(item.submission_note)" class="level-author">(by {{ levelAuthor(item.submission_note) }})</span>
+              {{ levelTitle(item) }}
+              <span v-if="levelAuthor(item)" class="level-author">(by {{ levelAuthor(item) }})</span>
             </strong>
-            <span v-if="hasStructuredLevelData(item.submission_note)" class="level-id-line">ID: {{ item.level_id }}</span>
+            <span v-if="item.note_data" class="level-id-line">ID: {{ item.level_id }}</span>
             <span v-if="sameTimestamp(item.upload_time, item.accepted_time)" class="muted timeline-line">
               <img src="/icons/check.svg" alt="Accepted" class="inline-icon" />
               Uploaded {{ formatDateTime(item.upload_time) }}
@@ -390,16 +379,16 @@ onMounted(() => {
           <button
             type="button"
             class="thumbnail-link"
-            @click="openPreview(getPendingImageUrl(item.id), levelTitle(item.submission_note, item.level_id))"
+            @click="openPreview(getPendingImageUrl(item.id), levelTitle(item))"
           >
             <img :src="getPendingImageUrl(item.id)" :alt="`Pending upload ${item.id}`" class="thumbnail-image" loading="lazy" />
           </button>
           <div class="thumbnail-content">
             <strong class="level-heading">
-              {{ levelTitle(item.submission_note, item.level_id) }}
-              <span v-if="levelAuthor(item.submission_note)" class="level-author">(by {{ levelAuthor(item.submission_note) }})</span>
+              {{ levelTitle(item) }}
+              <span v-if="levelAuthor(item)" class="level-author">(by {{ levelAuthor(item) }})</span>
             </strong>
-            <span v-if="hasStructuredLevelData(item.submission_note)" class="level-id-line">ID: {{ item.level_id }}</span>
+            <span v-if="item.note_data" class="level-id-line">ID: {{ item.level_id }}</span>
             <span class="muted timeline-line">
               <img src="/icons/upload.svg" alt="Submitted" class="inline-icon" />
               Submitted {{ formatDateTime(item.upload_time) }}
@@ -447,10 +436,10 @@ onMounted(() => {
           <div class="rejected-header">
             <div>
               <strong class="level-heading">
-                {{ levelTitle(item.submission_note, item.level_id) }}
-                <span v-if="levelAuthor(item.submission_note)" class="level-author">(by {{ levelAuthor(item.submission_note) }})</span>
+                {{ levelTitle(item) }}
+                <span v-if="levelAuthor(item)" class="level-author">(by {{ levelAuthor(item) }})</span>
               </strong>
-              <span v-if="hasStructuredLevelData(item.submission_note)" class="level-id-line">ID: {{ item.level_id }}</span>
+              <span v-if="item.note_data" class="level-id-line">ID: {{ item.level_id }}</span>
             </div>
           </div>
           <div class="rejected-body">

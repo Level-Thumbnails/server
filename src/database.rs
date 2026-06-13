@@ -3,15 +3,19 @@ use sqlx::{FromRow, Postgres, QueryBuilder};
 use std::collections::HashMap;
 use std::path::Path;
 
-use crate::util::VersionInfo;
+use crate::util::{ModUserAgent, ParsedSubmissionNote, VersionInfo};
 use chrono::{Datelike, NaiveDate, NaiveDateTime, Utc};
 use serde::{Deserialize, Serialize};
 use std::sync::Arc;
+use sqlx::types::Json;
+use tracing::{error, warn};
+use crate::util;
 
-const PENDING_UPLOAD_SELECT: &str = "SELECT uploads.id, user_id, users.username AS username, level_id, accepted, upload_time, \
-     submission_note, users.account_id AS account_id, users.role AS user_role \
+const PENDING_UPLOAD_SELECT: &str = "SELECT uploads.id, user_id, users.username AS username, level_id, accepted, upload_time, users.account_id AS account_id, users.role AS user_role, \
+     row_to_json(notes) AS note_data
      FROM uploads \
      LEFT JOIN users ON users.id = user_id \
+     LEFT JOIN notes ON notes.upload_id = uploads.id \
      WHERE accepted = FALSE AND accepted_time IS NULL";
 
 const MAX_MY_UPLOADS_PAGE_SIZE: u32 = 100;
@@ -259,6 +263,138 @@ pub struct UploadExtended {
     pub accepted_by_username: Option<String>,
 }
 
+#[derive(
+    Debug,
+    Clone,
+    Copy,
+    Serialize,
+    Deserialize,
+    sqlx::Type,
+    utoipa::ToSchema
+)]
+#[sqlx(type_name = "length_enum")]
+pub enum Length {
+    Tiny,
+    Short,
+    Medium,
+    Long,
+    XL,
+    Plat,
+}
+
+#[derive(
+    Debug,
+    Clone,
+    Copy,
+    Serialize,
+    Deserialize,
+    sqlx::Type,
+    utoipa::ToSchema
+)]
+#[sqlx(type_name = "rating_enum")]
+pub enum Rating {
+    NA,
+    Rated,
+    Featured,
+    Epic,
+    Legendary,
+    Mythic
+}
+
+#[derive(
+    Debug,
+    Clone,
+    Copy,
+    Serialize,
+    Deserialize,
+    sqlx::Type,
+    utoipa::ToSchema
+)]
+#[sqlx(type_name = "difficulty_enum")]
+pub enum Difficulty {
+    NA,
+    Auto,
+    Easy,
+    Normal,
+    Hard,
+    Harder,
+    Insane,
+    EasyDemon,
+    MediumDemon,
+    HardDemon,
+    InsaneDemon,
+    ExtremeDemon
+}
+
+#[derive(Debug, Clone, FromRow, Serialize, Deserialize, utoipa::ToSchema)]
+pub struct NoteData {
+    pub level_name: String,
+    pub creator_id: i64,
+    pub creator_name: String,
+    pub downloads: i64,
+    pub likes: i64,
+    pub stars: i64,
+    pub length: Length,
+    pub rating: Rating,
+    pub difficulty: Difficulty,
+    pub percentage: f32,
+    pub attempt_time: f64,
+    pub message: Option<String>,
+    pub mod_version: String,
+    pub mod_platform: String,
+}
+
+impl NoteData {
+    pub fn from_parsed(note: ParsedSubmissionNote, ua: ModUserAgent) -> Self {
+        Self {
+            level_name: note.level_name,
+            creator_id: note.creator_id,
+            creator_name: note.creator_name,
+            downloads: note.downloads,
+            likes: note.likes,
+            stars: note.stars,
+            length: match note.length {
+                0 => Length::Tiny,
+                1 => Length::Short,
+                2 => Length::Medium,
+                3 => Length::Long,
+                4 => Length::XL,
+                5 => Length::Plat,
+                _ => Length::Tiny
+            },
+            rating: match note.rating {
+                0 => Rating::NA,
+                1 => Rating::Rated,
+                2 => Rating::Featured,
+                3 => Rating::Epic,
+                4 => Rating::Legendary,
+                5 => Rating::Mythic,
+                _ => Rating::NA
+            },
+            difficulty: match note.difficulty {
+                0 => Difficulty::NA,
+                1 => Difficulty::Auto,
+                2 => Difficulty::Easy,
+                3 => Difficulty::Normal,
+                4 => Difficulty::Hard,
+                5 => Difficulty::Harder,
+                6 => Difficulty::Insane,
+                7 => Difficulty::EasyDemon,
+                8 => Difficulty::MediumDemon,
+                9 => Difficulty::HardDemon,
+                10 => Difficulty::InsaneDemon,
+                11 => Difficulty::ExtremeDemon,
+                _ => Difficulty::NA
+            },
+            percentage: note.percentage,
+            attempt_time: note.attempt_time,
+            message: note.message,
+            mod_version: ua.version.to_string(),
+            mod_platform: ua.platform.to_string(),
+        }
+    }
+}
+
 /// Represents a lock on a specific level, preventing new thumbnail uploads for that level until the lock is removed.
 #[derive(Debug, Clone, FromRow, Serialize, Deserialize, utoipa::ToSchema)]
 pub struct LevelLock {
@@ -283,7 +419,8 @@ pub struct PendingUpload {
     pub level_id: i64,
     pub accepted: bool,
     pub upload_time: NaiveDateTime,
-    pub submission_note: Option<String>,
+
+    pub note_data: Option<Json<NoteData>>,
     pub account_id: Option<i64>,
     pub user_role: Role,
 
@@ -297,7 +434,7 @@ pub struct ActiveUpload {
     pub level_id: i64,
     pub upload_time: NaiveDateTime,
     pub accepted_time: Option<NaiveDateTime>,
-    pub submission_note: Option<String>,
+    pub note_data: Option<Json<NoteData>>,
 }
 
 #[derive(Debug, Clone, FromRow, Serialize, Deserialize)]
@@ -306,7 +443,7 @@ pub struct RejectedUpload {
     pub level_id: i64,
     pub upload_time: NaiveDateTime,
     pub accepted_time: Option<NaiveDateTime>,
-    pub submission_note: Option<String>,
+    pub note_data: Option<Json<NoteData>>,
     pub reason: Option<String>,
     pub accepted_by_username: Option<String>,
 }
@@ -492,6 +629,88 @@ pub struct UpdateUserOptions {
     pub role: Option<Role>,
 }
 
+async fn migrate_submission_notes_perform(pool: &sqlx::Pool<Postgres>) -> Result<(), sqlx::Error> {
+    let mut tx = pool.begin().await?;
+
+    #[derive(Debug, Clone, FromRow)]
+    struct UploadRow {
+        id: i64,
+        submission_note: String,
+    }
+
+    let rows = sqlx::query_as::<_, UploadRow>(
+        "SELECT id, submission_note FROM uploads WHERE submission_note IS NOT NULL"
+    )
+        .fetch_all(&mut *tx)
+        .await?;
+
+    for row in rows {
+        let upload_id: i64 = row.id;
+        let legacy_note: String = row.submission_note;
+
+        if let Ok(parsed_note) = util::parse_submission_note(&legacy_note) {
+            let note_data = NoteData::from_parsed(parsed_note, ModUserAgent::default());
+            sqlx::query(
+                "INSERT INTO notes (upload_id, level_name, creator_id, creator_name, downloads, likes, stars, length, rating, difficulty, percentage, attempt_time, message, mod_version, mod_platform)
+                 VALUES ($1, $2, $3, $4, $5, $6, $7, $8::length_enum, $9::rating_enum, $10::difficulty_enum, $11, $12, $13, $14, $15)",
+            )
+                .bind(upload_id)
+                .bind(note_data.level_name)
+                .bind(note_data.creator_id)
+                .bind(note_data.creator_name)
+                .bind(note_data.downloads)
+                .bind(note_data.likes)
+                .bind(note_data.stars)
+                .bind(note_data.length)
+                .bind(note_data.rating)
+                .bind(note_data.difficulty)
+                .bind(note_data.percentage)
+                .bind(note_data.attempt_time)
+                .bind(note_data.message)
+                .bind(note_data.mod_version)
+                .bind(note_data.mod_platform)
+                .execute(&mut *tx)
+                .await?;
+        } else {
+            error!("Failed to parse submission_note for upload id {}: {}", upload_id, legacy_note);
+            return Err(sqlx::Error::Protocol(format!("Failed to parse submission_note for upload id {}", upload_id).into()));
+        }
+    }
+
+    tx.commit().await?;
+    warn!("Migration completed successfully!");
+    Ok(())
+}
+
+async fn migrate_submission_notes(pool: &sqlx::Pool<Postgres>) {
+    let row = sqlx::query!(
+        "SELECT EXISTS (
+            SELECT 1
+            FROM information_schema.columns
+            WHERE table_name='uploads' AND column_name='submission_note'
+        )",
+    )
+    .fetch_one(pool)
+    .await
+    .expect("Failed to check for submission_note column");
+
+    if row.exists.unwrap_or(false) {
+        warn!("Migrating old 'submission_note' column");
+
+        if let Err(e) = migrate_submission_notes_perform(pool).await {
+            error!("Failed to migrate submission notes: {}", e);
+            return; // don't drop the column if migration failed
+        }
+
+        sqlx::query("ALTER TABLE uploads DROP COLUMN submission_note")
+            .execute(pool)
+            .await
+            .expect("Failed to drop submission_note column");
+
+        warn!("Dropped old 'submission_note' column after migration");
+    }
+}
+
 impl AppState {
     pub async fn new() -> Self {
         let connection_string = dotenv::var("DATABASE_URL").expect("DATABASE_URL must be set");
@@ -503,6 +722,8 @@ impl AppState {
 
         // Run migrations if needed
         sqlx::migrate!("./migrations").run(&pool).await.expect("Failed to run migrations");
+
+        migrate_submission_notes(&pool).await;
 
         // load settings from state.json or create default
         let settings = if let Ok(settings_data) = tokio::fs::read_to_string("state.json").await {
@@ -715,37 +936,73 @@ impl AppState {
         user_id: i64,
         image_path: &str,
         accepted: bool,
-        submission_note: Option<&str>,
+        submission_note: NoteData,
     ) -> Result<(), sqlx::Error> {
-        if accepted {
-            sqlx::query(
-                "INSERT INTO uploads (level_id, user_id, image_path, accepted, accepted_time, accepted_by, submission_note)
-                 VALUES ($1, $2, $3, TRUE, NOW(), $2, $4)",
+        let upload_id: i64 = if accepted {
+            sqlx::query_scalar(
+                "INSERT INTO uploads (level_id, user_id, image_path, accepted, accepted_time, accepted_by)
+                 VALUES ($1, $2, $3, TRUE, NOW(), $2) RETURNING id",
             )
                 .bind(level_id)
                 .bind(user_id)
                 .bind(image_path)
-                .bind(submission_note)
-                .execute(&*self.pool)
-                .await?;
+                .fetch_one(&*self.pool)
+                .await?
         } else {
-            sqlx::query(
-                "INSERT INTO uploads (level_id, user_id, image_path, accepted, submission_note)
-                 VALUES ($1, $2, $3, FALSE, $4)
+            sqlx::query_scalar(
+                "INSERT INTO uploads (level_id, user_id, image_path, accepted)
+                 VALUES ($1, $2, $3, FALSE)
                  ON CONFLICT (user_id, level_id)
                  WHERE accepted = FALSE AND accepted_time IS NULL
                  DO UPDATE SET
                      image_path = EXCLUDED.image_path,
-                     submission_note = EXCLUDED.submission_note,
-                     upload_time = NOW()",
+                     upload_time = NOW()
+                 RETURNING id",
             )
-            .bind(level_id)
-            .bind(user_id)
-            .bind(image_path)
-            .bind(submission_note)
-            .execute(&*self.pool)
-            .await?;
-        }
+                .bind(level_id)
+                .bind(user_id)
+                .bind(image_path)
+                .fetch_one(&*self.pool)
+                .await?
+        };
+
+        sqlx::query(
+            "INSERT INTO notes (upload_id, level_name, creator_id, creator_name, downloads, likes, stars, length, rating, difficulty, percentage, attempt_time, message, mod_version, mod_platform)
+             VALUES ($1, $2, $3, $4, $5, $6, $7, $8::length_enum, $9::rating_enum, $10::difficulty_enum, $11, $12, $13, $14, $15)
+             ON CONFLICT (upload_id)
+             DO UPDATE SET
+                level_name = EXCLUDED.level_name,
+                creator_id = EXCLUDED.creator_id,
+                creator_name = EXCLUDED.creator_name,
+                downloads = EXCLUDED.downloads,
+                likes = EXCLUDED.likes,
+                stars = EXCLUDED.stars,
+                length = EXCLUDED.length,
+                rating = EXCLUDED.rating,
+                difficulty = EXCLUDED.difficulty,
+                percentage = EXCLUDED.percentage,
+                attempt_time = EXCLUDED.attempt_time,
+                message = EXCLUDED.message,
+                mod_version = EXCLUDED.mod_version,
+                mod_platform = EXCLUDED.mod_platform",
+        )
+        .bind(upload_id)
+        .bind(submission_note.level_name)
+        .bind(submission_note.creator_id)
+        .bind(submission_note.creator_name)
+        .bind(submission_note.downloads)
+        .bind(submission_note.likes)
+        .bind(submission_note.stars)
+        .bind(submission_note.length)
+        .bind(submission_note.rating)
+        .bind(submission_note.difficulty)
+        .bind(submission_note.percentage)
+        .bind(submission_note.attempt_time)
+        .bind(submission_note.message)
+        .bind(submission_note.mod_version)
+        .bind(submission_note.mod_platform)
+        .execute(&*self.pool)
+        .await?;
 
         Ok(())
     }
@@ -1010,12 +1267,13 @@ impl AppState {
                     uploads.level_id,
                     uploads.upload_time,
                     uploads.accepted_time,
-                    uploads.submission_note
+                    row_to_json(notes) AS note_data
                 FROM uploads
+                LEFT JOIN notes ON uploads.id = notes.upload_id
                 WHERE uploads.accepted = TRUE AND uploads.deleted_at IS NULL
                 ORDER BY uploads.level_id, uploads.upload_time DESC, uploads.id DESC
             )
-            SELECT id, level_id, upload_time, accepted_time, submission_note
+            SELECT id, level_id, upload_time, accepted_time, note_data
             FROM active_uploads
             WHERE user_id = $1 AND ($4::BIGINT IS NULL OR level_id = $4)
             ORDER BY upload_time DESC, id DESC
@@ -1066,11 +1324,12 @@ impl AppState {
                 uploads.level_id,
                 uploads.upload_time,
                 uploads.accepted_time,
-                uploads.submission_note,
                 uploads.reason,
+                row_to_json(notes) AS note_data,
                 accepted_by.username AS accepted_by_username
             FROM uploads
             LEFT JOIN users AS accepted_by ON accepted_by.id = uploads.accepted_by
+            LEFT JOIN notes ON notes.upload_id = uploads.id
             WHERE uploads.user_id = $1
               AND uploads.accepted = FALSE
               AND uploads.accepted_time IS NOT NULL

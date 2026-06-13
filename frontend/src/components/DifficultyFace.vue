@@ -26,11 +26,11 @@ const DIFFICULTY_FILES = {
     'Hard': 'hard',
     'Harder': 'harder',
     'Insane': 'insane',
-    'Easy Demon': 'demon-easy',
-    'Medium Demon': 'demon-medium',
-    'Hard Demon': 'demon-hard',
-    'Insane Demon': 'demon-insane',
-    'Extreme Demon': 'demon-extreme'
+    'EasyDemon': 'demon-easy',
+    'MediumDemon': 'demon-medium',
+    'HardDemon': 'demon-hard',
+    'InsaneDemon': 'demon-insane',
+    'ExtremeDemon': 'demon-extreme'
 }
 
 function getImagePath(difficulty: string, rating: string): string {

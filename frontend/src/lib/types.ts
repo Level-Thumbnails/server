@@ -50,22 +50,24 @@ export interface ServerSettings {
 }
 
 export const RATING_NAMES = ['NA', 'Rated', 'Featured', 'Epic', 'Legendary', 'Mythic'] as const;
-export const DIFFICULTY_NAMES = ['NA', 'Auto', 'Easy', 'Normal', 'Hard', 'Harder', 'Insane', 'Easy Demon', 'Medium Demon', 'Hard Demon', 'Insane Demon', 'Extreme Demon'] as const;
+export const DIFFICULTY_NAMES = ['NA', 'Auto', 'Easy', 'Normal', 'Hard', 'Harder', 'Insane', 'EasyDemon', 'MediumDemon', 'HardDemon', 'InsaneDemon', 'ExtremeDemon'] as const;
 export const LENGTH_NAMES = ['Tiny', 'Short', 'Medium', 'Long', 'XL', 'Plat'] as const;
 
-export interface SubmissionNotesObject {
-  level_name: string | null;
-  creator_id: number | null;
-  creator_name: string | null;
-  downloads: number | null;
-  likes: number | null;
-  stars: number | null;
-  length: typeof LENGTH_NAMES[number] | null;
-  rating: typeof RATING_NAMES[number] | null;
-  difficulty: typeof DIFFICULTY_NAMES[number] | null;
-  percentage: number | null;
-  attempt_time: number | null;
-  message: string | null;
+export interface NoteData {
+  attempt_time: number,
+  creator_id: number,
+  creator_name: string,
+  difficulty: 'NA' | 'Auto' | 'Easy' | 'Normal' | 'Hard' | 'Harder' | 'Insane' | 'EasyDemon' | 'MediumDemon' | 'HardDemon' | 'InsaneDemon' | 'ExtremeDemon',
+  downloads: number,
+  length: 'Tiny' | 'Short' | 'Medium' | 'Long' | 'XL' | 'Plat',
+  level_name: string,
+  likes: number,
+  message: string | null,
+  mod_platform: 'Windows' | 'Android64' | 'Android32' | 'MacIntel' | 'MacArm' | 'iOS' | null,
+  mod_version: string | null,
+  percentage: number,
+  rating: 'NA' | 'Rated' | 'Featured' | 'Epic' | 'Legendary' | 'Mythic',
+  stars: number
 }
 
 export interface PendingItem {
@@ -79,7 +81,7 @@ export interface PendingItem {
   submission_note: string | null;
   account_id: number | null;
   user_role: 'user' | 'verified' | 'moderator' | 'admin' | 'owner';
-  note_data: SubmissionNotesObject | null | undefined; // populated on load
+  note_data: NoteData | null;
 }
 
 export interface PendingResponse {
@@ -94,7 +96,7 @@ export interface MyThumbnailActiveItem {
   level_id: number;
   upload_time: string;
   accepted_time: string | null;
-  submission_note: string | null;
+  note_data: NoteData | null;
 }
 
 export interface MyThumbnailRejectedItem {
@@ -102,7 +104,7 @@ export interface MyThumbnailRejectedItem {
   level_id: number;
   upload_time: string;
   accepted_time: string | null;
-  submission_note: string | null;
+  note_data: NoteData | null;
   reason: string | null;
   accepted_by_username: string | null;
 }
