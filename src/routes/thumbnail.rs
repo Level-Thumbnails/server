@@ -5,7 +5,6 @@ use axum::response::Response;
 use image::ImageReader;
 use serde::{Deserialize, Serialize};
 use std::path::PathBuf;
-use serde_json::json;
 use tracing::warn;
 use webp::Encoder;
 use crate::util::MessageResponse;

@@ -3,18 +3,26 @@ import {ref} from "vue";
 import SessionManager from "../../managers/session.ts";
 import type { ServerSettings } from "../../lib/types";
 import { fetchJson } from "../../lib/utils.ts";
+import { alertModal, confirmModal } from "../../lib/modals";
 
 const user = ref(SessionManager.getUser()!);
 const token = ref("");
 const loadingToken = ref(false);
 const linkingError = ref("");
 
+function hasServerSettingsPerms() {
+  return user.role === 'admin' || user.role === 'owner';
+}
+
 function downloadMyData() {
 
 }
 
-function deleteAccount() {
-  confirm("Are you sure you want to delete your account and all data associated with it? This action cannot be undone.");
+async function deleteAccount() {
+  await confirmModal(
+    'Delete My Account',
+    'Are you sure you want to delete your account and all data associated with it? This action cannot be undone.'
+  );
 }
 
 async function copyToken() {
@@ -56,7 +64,7 @@ function verifyAccount() {
 // if admin, fetch server settings
 const settings = ref<ServerSettings | null>(null);
 const pendingSettings = ref<ServerSettings | null>(null);
-if (user.value.role === 'admin') {
+if (hasServerSettingsPerms()) {
   fetchJson<ServerSettings>('/admin/settings')
       .then((data) => {
         settings.value = data;
@@ -80,10 +88,10 @@ async function updateServerSettings() {
     });
 
     settings.value = {...pendingSettings.value};
-    alert("Server settings updated successfully.");
+    await alertModal('Server Settings', 'Server settings updated successfully.');
   } catch (error) {
     const message = error instanceof Error ? error.message : 'Unknown error';
-    alert(`Error updating server settings: ${message}`);
+    await alertModal('Server Settings', `Error updating server settings: ${message}`);
   }
 }
 
@@ -115,7 +123,7 @@ async function updateServerSettings() {
         {{ linkingError }}
       </p>
     </section>
-    <section v-if="user.role === 'admin' && settings && pendingSettings">
+    <section v-if="hasServerSettingsPerms() && settings && pendingSettings">
       <h3>Server Settings</h3>
       <div class="d-flex gap-1">
         <button class="btn flex-1"

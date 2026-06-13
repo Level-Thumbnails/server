@@ -5,6 +5,7 @@ import ImageDiffer from "../../components/ImageDiffer.vue";
 import DifficultyFace from "../../components/DifficultyFace.vue";
 import type { PendingItem, PendingResponse } from "../../lib/types";
 import { fetchJson, parseSubmissionNote } from "../../lib/utils";
+import { alertModal } from "../../lib/modals";
 
 const REJECT_PRESETS = [
   "Original was better",
@@ -256,7 +257,10 @@ async function thumbnailAction(id: number, accept: boolean) {
     await fetchPendingItems();
     closeItem();
   } catch (err) {
-    alert("An error occurred while processing the thumbnail action: " + (err instanceof Error ? err.message : 'Unknown error'));
+    await alertModal(
+      'Thumbnail Action',
+      'An error occurred while processing the thumbnail action: ' + (err instanceof Error ? err.message : 'Unknown error')
+    );
   } finally {
     fullscreenLoading.value = false;
   }

@@ -347,7 +347,6 @@ onMounted(() => {
                 Accepted {{ formatDateTime(item.accepted_time) }}
               </span>
             </template>
-            <p v-if="item.submission_note && !hasStructuredLevelData(item.submission_note)" class="note-line note-raw">{{ item.submission_note }}</p>
           </div>
         </article>
       </div>
@@ -405,7 +404,6 @@ onMounted(() => {
               <img src="/icons/upload.svg" alt="Submitted" class="inline-icon" />
               Submitted {{ formatDateTime(item.upload_time) }}
             </span>
-            <p v-if="item.submission_note && !hasStructuredLevelData(item.submission_note)" class="note-line note-raw">{{ item.submission_note }}</p>
           </div>
         </article>
       </div>
@@ -456,7 +454,6 @@ onMounted(() => {
             </div>
           </div>
           <div class="rejected-body">
-            <p v-if="item.submission_note && !hasStructuredLevelData(item.submission_note)" class="note-line note-raw">{{ item.submission_note }}</p>
             <p class="reason-line">
               <img src="/icons/cross.svg" alt="Rejected" class="inline-icon" />
               <strong>Reason:</strong> {{ item.reason || 'No reason provided' }}

@@ -6,6 +6,7 @@ import { fetchJson, unwrap } from '../../lib/utils';
 import SessionManager from '../../managers/session';
 import type { UserListResponse, UserRow } from '../../lib/types';
 import type { ModalButton } from '../../components/Modal.vue';
+import { alertModal, confirmModal } from '../../lib/modals';
 
 type SortColumn = 'id' | 'username' | 'role' | 'total_uploads' | 'accepted' | 'pending' | 'rejected' | 'active_thumbnails';
 type SortDirection = 'asc' | 'desc';
@@ -186,7 +187,10 @@ function toggleRoleDropdown(user: UserRow, event: MouseEvent) {
 async function changeUserRole(userId: number, newRole: UserRole) {
   roleChangeLoading.value = userId;
 
-  if (!confirm(`Are you sure you want to change ${users.value.find(u => u.id === userId)?.username}'s role to "${newRole}"?`)) {
+  if (!await confirmModal(
+    'Change User Role',
+    `Are you sure you want to change ${users.value.find(u => u.id === userId)?.username}'s role to "${newRole}"?`
+  )) {
     roleChangeLoading.value = null;
     return;
   }
@@ -207,7 +211,7 @@ async function changeUserRole(userId: number, newRole: UserRole) {
     }
   } catch (err) {
     const message = err instanceof Error ? err.message : 'Failed to change user role';
-    alert(`Error: ${message}`);
+    await alertModal('Change User Role', `Error: ${message}`);
   } finally {
     roleChangeLoading.value = null;
   }
@@ -380,14 +384,14 @@ async function handleBanAction(actionIndex: number) {
   }
 
   if (!banModalUserId.value || !banReason.value.trim()) {
-    alert('Please provide a ban reason');
+    await alertModal('Ban User', 'Please provide a ban reason');
     return;
   }
 
   const user = users.value.find(u => u.id === banModalUserId.value);
   if (!user) return;
 
-  if (!confirm(`Are you sure you want to ban ${user.username}?`)) {
+  if (!await confirmModal('Ban User', `Are you sure you want to ban ${user.username}?`)) {
     return;
   }
 
@@ -415,11 +419,11 @@ async function handleBanAction(actionIndex: number) {
     }
 
     closeBanModal();
-    alert('User banned successfully');
+    await alertModal('Ban User', 'User banned successfully');
     fetchUsers();
   } catch (err) {
     const message = err instanceof Error ? err.message : 'Failed to ban user';
-    alert(`Error: ${message}`);
+    await alertModal('Ban User', `Error: ${message}`);
   } finally {
     banLoading.value = false;
   }
@@ -429,7 +433,7 @@ async function unbanUser(userId: number) {
   const user = users.value.find(u => u.id === userId);
   if (!user) return;
 
-  if (!confirm(`Are you sure you want to unban ${user.username}?`)) {
+  if (!await confirmModal('Unban User', `Are you sure you want to unban ${user.username}?`)) {
     return;
   }
 
@@ -446,11 +450,11 @@ async function unbanUser(userId: number) {
       users.value[index].banned = false;
     }
 
-    alert('User unbanned successfully');
+    await alertModal('Unban User', 'User unbanned successfully');
     fetchUsers();
   } catch (err) {
     const message = err instanceof Error ? err.message : 'Failed to unban user';
-    alert(`Error: ${message}`);
+    await alertModal('Unban User', `Error: ${message}`);
   } finally {
     banLoading.value = false;
   }
