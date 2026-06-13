@@ -410,7 +410,7 @@ onMounted(loadDashboard);
                 <LazyCounter :value="stats!.thumbnails" />
               </strong>
             </div>
-            <div class="site-row">
+            <div class="site-row" :title="stats ? stats.online_moderators.join(', ') : ''">
               <span>Moderators online</span>
               <strong>
                 <LazyCounter :value="stats!.online_moderators.length" />
