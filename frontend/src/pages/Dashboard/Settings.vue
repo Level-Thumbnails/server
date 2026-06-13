@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import {ref} from "vue";
-import SessionManager from "../../managers/session.ts";
+import SessionManager, {type User} from "../../managers/session.ts";
 import type { ServerSettings } from "../../lib/types";
 import { fetchJson } from "../../lib/utils.ts";
 import { alertModal, confirmModal } from "../../lib/modals";
@@ -11,7 +11,9 @@ const loadingToken = ref(false);
 const linkingError = ref("");
 
 function hasServerSettingsPerms() {
-  return user.role === 'admin' || user.role === 'owner';
+  return user &&
+      ((user as unknown as User).role === 'admin' ||
+       (user as unknown as User).role === 'owner');
 }
 
 function downloadMyData() {

@@ -21,6 +21,7 @@ export interface StatsResponse {
   accepted_uploads_total: number;
   total_levels: number;
   current_pending_uploads: number;
+  online_moderators: string[];
 }
 
 export interface UserHistoryPoint {

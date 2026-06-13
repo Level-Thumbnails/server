@@ -411,9 +411,9 @@ onMounted(loadDashboard);
               </strong>
             </div>
             <div class="site-row">
-              <span>Total levels</span>
+              <span>Moderators online</span>
               <strong>
-                <LazyCounter :value="stats!.total_levels" />
+                <LazyCounter :value="stats!.online_moderators.length" />
               </strong>
             </div>
             <div class="site-row">

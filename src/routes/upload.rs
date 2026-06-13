@@ -47,6 +47,8 @@ async fn authenticate_moderator(
         ));
     }
 
+    let _ = db.touch_moderator_seen(user.id, user.username.clone()).await;
+
     Ok(user)
 }
 
@@ -62,6 +64,8 @@ async fn authenticate_admin(
             "Admin or Owner privileges required",
         ));
     }
+
+    let _ = db.touch_moderator_seen(user.id, user.username.clone()).await;
 
     Ok(user)
 }

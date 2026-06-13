@@ -107,6 +107,7 @@ impl Default for Settings {
 pub struct AppState {
     pub pool: Arc<sqlx::Pool<Postgres>>,
     pub settings: Arc<tokio::sync::RwLock<Settings>>,
+    pub online_moderators: Arc<tokio::sync::RwLock<HashMap<i64, (String, chrono::DateTime<Utc>)>>>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
@@ -513,7 +514,27 @@ impl AppState {
         AppState {
             pool: Arc::new(pool),
             settings: Arc::new(tokio::sync::RwLock::new(settings)),
+            online_moderators: Arc::new(tokio::sync::RwLock::new(HashMap::new())),
         }
+    }
+
+    pub async fn touch_moderator_seen(&self, moderator_id: i64, username: String) {
+        let mut map = self.online_moderators.write().await;
+        map.insert(moderator_id, (username, chrono::Utc::now()));
+    }
+
+    pub async fn get_online_moderators(&self, window_minutes: i64) -> Vec<(i64, String)> {
+        let map = self.online_moderators.read().await;
+        let threshold = Utc::now() - chrono::Duration::minutes(window_minutes);
+        map.iter()
+            .filter_map(|(id, (username, last_seen))| {
+                if *last_seen >= threshold {
+                    Some((*id, username.clone()))
+                } else {
+                    None
+                }
+            })
+            .collect()
     }
 
     pub async fn get_upload_info(&self, id: i64) -> Option<UploadInfo> {

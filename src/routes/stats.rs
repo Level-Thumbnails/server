@@ -5,6 +5,8 @@ use axum::response::Response;
 use serde::{Serialize, Deserialize};
 use util::MessageResponse;
 
+const ONLINE_MODERATOR_WINDOW_MINUTES: i64 = 5;
+
 /// Represents a snapshot of server statistics at a specific point in time.
 #[derive(Debug, Serialize, Deserialize, utoipa::ToSchema)]
 pub struct ServerStats {
@@ -26,6 +28,8 @@ pub struct ServerStats {
     users_per_month: i64,
     /// Total number of registered users
     users_total: i64,
+    /// Usernames of moderators seen online in the last 5 minutes.
+    online_moderators: Vec<String>,
 }
 
 #[derive(Debug, Serialize, Deserialize, utoipa::ToSchema)]
@@ -58,7 +62,8 @@ pub struct StatsResponse {
                 "total_levels": 123965,
                 "uploads_total": 142414,
                 "users_per_month": 6122359,
-                "users_total": 21215
+                "users_total": 21215,
+                "online_moderators": ["prevter"]
               },
               "status": 200
             })
@@ -103,6 +108,12 @@ pub async fn get_stats(State(db): State<database::AppState>) -> Response {
     };
 
     let snapshot = latest_snapshot;
+    let online_moderators = db
+        .get_online_moderators(ONLINE_MODERATOR_WINDOW_MINUTES)
+        .await
+        .into_iter()
+        .map(|(_, username)| username)
+        .collect();
 
     util::response(
         StatusCode::OK,
@@ -118,6 +129,7 @@ pub async fn get_stats(State(db): State<database::AppState>) -> Response {
                 accepted_uploads_total: snapshot.as_ref().map(|s| s.accepted_uploads_total).unwrap_or(0),
                 total_levels,
                 current_pending_uploads,
+                online_moderators,
             }
         }).unwrap()
     )
