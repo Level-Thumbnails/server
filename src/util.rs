@@ -107,7 +107,7 @@ pub fn parse_submission_note(raw: &str) -> Result<ParsedSubmissionNote, String> 
         || downloads.is_none()
         || likes.is_none()
         || stars.is_none()
-        || length.is_none()
+        // || length.is_none() // length can be sometimes missing
         || rating.is_none()
         || difficulty.is_none()
         || percentage.is_none()
