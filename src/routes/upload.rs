@@ -202,12 +202,7 @@ pub async fn upload(
         return util::str_response(StatusCode::BAD_REQUEST, "Missing submission note header");
     };
 
-    let submission_note = match util::parse_submission_note(value.to_str().unwrap_or_default()) {
-        Ok(note) => note,
-        Err(response) => return util::str_response(StatusCode::BAD_REQUEST, &response),
-    };
-
-    let note = match util::parse_useragent(&headers) {
+    let ua = match util::parse_useragent(&headers) {
         Some(ua) => {
             if db.settings.read().await.min_supported_client.is_newer_than(&ua.version) {
                 return util::str_response(
@@ -218,7 +213,7 @@ pub async fn upload(
                     ),
                 );
             }
-            NoteData::from_parsed(submission_note, ua)
+            ua
         }
         None => {
             return util::str_response(
@@ -226,6 +221,11 @@ pub async fn upload(
                 "Your game version is not supported. Please update Geometry Dash and install the latest version of Level Thumbnails mod.",
             );
         }
+    };
+
+    let note = match util::parse_submission_note(value.to_str().unwrap_or_default()) {
+        Ok(note) => NoteData::from_parsed(note, ua),
+        Err(response) => return util::str_response(StatusCode::BAD_REQUEST, &response),
     };
 
     // allow admins and owners to bypass locks
