@@ -532,6 +532,7 @@ function roleIcon(role: string) {
           </div>
           <div class="filter-results">
             Total {{ totalItems }} items
+            <img src="/icons/refresh.svg" alt="Refresh Icon" class="refresh-icon" @click="fetchPendingItems()"/>
           </div>
         </div>
 
@@ -1068,6 +1069,16 @@ textarea.form-control {
 
 .sensitive-actions {
   max-width: 800px;
+}
+
+.refresh-icon {
+  vertical-align: sub;
+  cursor: pointer;
+  transition: transform 0.2s;
+}
+
+.refresh-icon:hover {
+  transform: scale(1.1);
 }
 
 .sensitive-actions > div {
