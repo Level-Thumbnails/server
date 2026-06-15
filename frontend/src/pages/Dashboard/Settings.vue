@@ -1,9 +1,10 @@
 <script setup lang="ts">
-import {ref} from "vue";
+import {ref, watch} from "vue";
 import SessionManager from "../../managers/session.ts";
 import type { ServerSettings } from "../../lib/types";
 import { fetchJson } from "../../lib/utils.ts";
 import { alertModal, confirmModal } from "../../lib/modals";
+import SettingsManager, {type UserSettings} from "../../managers/settings.ts";
 
 const user = ref(SessionManager.getUser()!);
 const token = ref("");
@@ -12,6 +13,10 @@ const linkingError = ref("");
 
 function hasServerSettingsPerms() {
   return user.value && (user.value.role === 'admin' || user.value.role === 'owner');
+}
+
+function hasModeratorPerms() {
+  return user.value && (user.value.role === 'moderator' || user.value.role === 'admin' || user.value.role === 'owner');
 }
 
 function downloadMyData() {
@@ -95,6 +100,11 @@ async function updateServerSettings() {
   }
 }
 
+const userSettings = ref<UserSettings>(SettingsManager.getSettings());
+watch(userSettings, (newSettings) => {
+  SettingsManager.saveSettings(newSettings);
+}, { deep: true });
+
 </script>
 
 <template>
@@ -142,6 +152,23 @@ async function updateServerSettings() {
         <button class="btn btn-primary flex-1" @click="updateServerSettings"
                 :disabled="JSON.stringify(settings) === JSON.stringify(pendingSettings)">
           Save Changes
+        </button>
+      </div>
+    </section>
+    <section v-if="hasModeratorPerms()">
+      <h3>Settings</h3>
+      <div class="d-flex mt-1">
+        <button class="btn flex-1"
+                :class="{ 'btn-danger': !userSettings.confirm_accept, 'btn-success': userSettings.confirm_accept }"
+                @click="userSettings.confirm_accept = !userSettings.confirm_accept;">
+          {{ userSettings.confirm_accept ? "Confirmation for accept is enabled" : "Confirmation for accept is disabled" }}
+        </button>
+      </div>
+      <div class="d-flex mt-1">
+        <button class="btn flex-1"
+                :class="{ 'btn-danger': !userSettings.confirm_reject, 'btn-success': userSettings.confirm_reject }"
+                @click="userSettings.confirm_reject = !userSettings.confirm_reject;">
+          {{ userSettings.confirm_reject ? "Confirmation for reject is enabled" : "Confirmation for reject is disabled" }}
         </button>
       </div>
     </section>

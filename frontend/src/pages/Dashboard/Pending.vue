@@ -5,7 +5,8 @@ import ImageDiffer from "../../components/ImageDiffer.vue";
 import DifficultyFace from "../../components/DifficultyFace.vue";
 import type { PendingItem, PendingResponse } from "../../lib/types";
 import { fetchJson } from "../../lib/utils";
-import { alertModal } from "../../lib/modals";
+import {alertModal, confirmModal} from "../../lib/modals";
+import SettingsManager from "../../managers/settings.ts";
 
 const REJECT_PRESETS = [
   "Original was better",
@@ -38,14 +39,16 @@ const rejectReason = ref<string>("");
 
 const fullscreenLoading = ref(false);
 
+const settings = SettingsManager.getSettings();
+
 const filterUsername = ref<string>("");
 const filterLevelId = ref<string>("");
-const filterReplacement = ref<string>("all"); // "all", "replacement", "new"
+const filterReplacement = ref<string>(settings.replacement_filter); // "all", "replacement", "new"
 
 let debounceTimer: ReturnType<typeof setTimeout> | null = null;
 
 const currentPage = ref(1);
-const itemsPerPage = ref(12);
+const itemsPerPage = ref(settings.pending_per_page);
 const pageInput = ref<string>("");
 
 const filteredItems = computed(() => pendingItems.value);
@@ -128,11 +131,19 @@ watch([filterLevelId, filterUsername], () => {
 watch(filterReplacement, () => {
   currentPage.value = 1;
   fetchPendingItems();
+
+  const settings = SettingsManager.getSettings();
+  settings.replacement_filter = filterReplacement.value as 'all' | 'replacement' | 'new';
+  SettingsManager.saveSettings(settings);
 });
 
 watch(itemsPerPage, () => {
   currentPage.value = 1;
   fetchPendingItems();
+
+  const settings = SettingsManager.getSettings();
+  settings.pending_per_page = itemsPerPage.value;
+  SettingsManager.saveSettings(settings);
 });
 
 watch(currentPage, () => {
@@ -224,6 +235,22 @@ async function thumbnailAction(id: number, accept: boolean) {
     if (rejectReason.value.trim() === "") {
       rejectReasonField.value!.focus();
       return;
+    }
+  }
+
+  if (accept) {
+    if (settings.confirm_accept) {
+      if (!await confirmModal(
+        'Confirm Accept',
+        'Are you sure you want to accept this thumbnail?',
+      )) return;
+    }
+  } else {
+    if (settings.confirm_reject) {
+      if (!await confirmModal(
+        'Confirm Reject',
+        'Are you sure you want to reject this thumbnail?',
+      )) return;
     }
   }
 
