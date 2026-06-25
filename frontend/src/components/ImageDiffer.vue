@@ -16,6 +16,7 @@ const zoomImage = ref<'a' | 'b' | null>(null);
 const isDragging = ref(false);
 const dragStart = ref({ x: 0, y: 0 });
 const imagePosition = ref({ x: 0, y: 0 });
+const zoomContainerRef = ref<HTMLDivElement | null>(null);
 
 const showImageA = computed(() => viewMode.value === 'a' || viewMode.value === 'side-by-side');
 const showImageB = computed(() => viewMode.value === 'b' || viewMode.value === 'side-by-side');
@@ -48,11 +49,31 @@ const closeZoom = () => {
 };
 
 const handleWheel = (event: WheelEvent) => {
-  if (!isZoomed.value) return;
-
+  if (!isZoomed.value || !zoomContainerRef.value) return;
   event.preventDefault();
-  const delta = event.deltaY > 0 ? -0.1 : 0.1;
-  zoomLevel.value = Math.max(0.5, Math.min(5, zoomLevel.value + delta));
+
+  const rect = zoomContainerRef.value.getBoundingClientRect();
+
+  const mouseX = event.clientX - rect.left - rect.width / 2;
+  const mouseY = event.clientY - rect.top - rect.height / 2;
+
+  const zoomFactor = 1.15;
+  const delta = event.deltaY > 0 ? 1 / zoomFactor : zoomFactor;
+
+  const oldScale = zoomLevel.value;
+  const newScale = Math.max(0.5, Math.min(6, oldScale * delta));
+
+  if (Math.abs(newScale - oldScale) < 0.0001) return;
+
+  const localX = (mouseX - imagePosition.value.x) / oldScale;
+  const localY = (mouseY - imagePosition.value.y) / oldScale;
+
+  zoomLevel.value = newScale;
+
+  imagePosition.value = {
+    x: mouseX - localX * newScale,
+    y: mouseY - localY * newScale
+  };
 };
 
 const handleMouseDown = (event: MouseEvent) => {
@@ -135,8 +156,8 @@ const imageTransform = computed(() => {
           <div class="zoom-info">
             Zoom: {{ Math.round(zoomLevel * 100) }}% | Scroll to zoom | Drag to pan
           </div>
-          <div class="zoom-image-container" @mousedown="handleMouseDown" @mousemove="handleMouseMove"
-            @mouseup="handleMouseUp" @mouseleave="handleMouseLeave">
+          <div ref="zoomContainerRef" class="zoom-image-container" @mousedown="handleMouseDown"
+            @mousemove="handleMouseMove" @mouseup="handleMouseUp" @mouseleave="handleMouseLeave">
             <img :src="getZoomedImageSrc" :alt="`Zoomed Image ${zoomImage?.toUpperCase()}`"
               :style="{ transform: imageTransform }" :class="{ dragging: isDragging }" @wheel="handleWheel"
               @dragstart.prevent />
@@ -308,6 +329,7 @@ const imageTransform = computed(() => {
   cursor: grab;
   user-select: none;
   -webkit-user-drag: none;
+  transition: transform 0.12s ease-out;
 }
 
 .zoom-image-container img.dragging {
