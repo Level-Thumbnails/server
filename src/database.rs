@@ -1,6 +1,6 @@
 use sqlx::postgres::PgPoolOptions;
 use sqlx::{FromRow, Postgres, QueryBuilder};
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::path::Path;
 
 use crate::util::{ModUserAgent, ParsedSubmissionNote, VersionInfo};
@@ -8,6 +8,7 @@ use chrono::{Datelike, NaiveDate, NaiveDateTime, Utc};
 use serde::{Deserialize, Serialize};
 use std::sync::Arc;
 use sqlx::types::Json;
+use tokio::sync::RwLock;
 use tracing::{error, warn};
 use crate::util;
 
@@ -110,8 +111,9 @@ impl Default for Settings {
 #[derive(Debug, Clone)]
 pub struct AppState {
     pub pool: Arc<sqlx::Pool<Postgres>>,
-    pub settings: Arc<tokio::sync::RwLock<Settings>>,
-    pub online_moderators: Arc<tokio::sync::RwLock<HashMap<i64, (String, chrono::DateTime<Utc>)>>>,
+    pub settings: Arc<RwLock<Settings>>,
+    pub online_moderators: Arc<RwLock<HashMap<i64, (String, chrono::DateTime<Utc>)>>>,
+    pub registered_users: Arc<RwLock<HashSet<i64>>>
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
@@ -732,10 +734,25 @@ impl AppState {
             Settings::default()
         };
 
+        // pre-load registered users
+        let mut set: HashSet<i64>;
+        {
+            let rows = sqlx::query!("SELECT account_id FROM users WHERE account_id != -1")
+                .fetch_all(&pool)
+                .await
+                .expect("Failed to fetch registered users");
+
+            set = HashSet::with_capacity(rows.len());
+            for row in rows {
+                set.insert(row.account_id);
+            }
+        }
+
         AppState {
             pool: Arc::new(pool),
-            settings: Arc::new(tokio::sync::RwLock::new(settings)),
-            online_moderators: Arc::new(tokio::sync::RwLock::new(HashMap::new())),
+            settings: Arc::new(RwLock::new(settings)),
+            online_moderators: Arc::new(RwLock::new(HashMap::new())),
+            registered_users: Arc::new(RwLock::new(set)),
         }
     }
 
@@ -811,13 +828,16 @@ impl AppState {
         if let Some(user) = user {
             Ok(user)
         } else {
-            sqlx::query_as::<_, User>(
+            let user = sqlx::query_as::<_, User>(
                 "INSERT INTO users (account_id, username, role) VALUES ($1, $2, 'user') RETURNING *",
             )
                 .bind(account_id)
                 .bind(username)
                 .fetch_one(&*self.pool)
-                .await
+                .await?;
+
+            self.registered_users.write().await.insert(account_id);
+            Ok(user)
         }
     }
 
@@ -1550,6 +1570,14 @@ impl AppState {
              GROUP BY users.id, users.account_id, users.username, users.role",
         )
             .bind(id)
+            .fetch_optional(&*self.pool)
+            .await
+            .ok()?
+    }
+
+    pub async fn get_user_by_gd_id(&self, account_id: i64) -> Option<User> {
+        sqlx::query_as::<_, User>("SELECT * FROM users WHERE account_id = $1")
+            .bind(account_id)
             .fetch_optional(&*self.pool)
             .await
             .ok()?

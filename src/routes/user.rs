@@ -49,6 +49,30 @@ pub async fn get_user_by_id(Path(id): Path<i64>, State(db): State<database::AppS
     get_user_info(id, &db).await
 }
 
+pub async fn get_user_by_gd_id(Path(id): Path<i64>, State(db): State<database::AppState>) -> Response {
+    if id <= 0 {
+        return util::str_response(StatusCode::BAD_REQUEST, "Invalid GD user ID");
+    }
+
+    {
+        let set = db.registered_users.read().await;
+        if !set.contains(&id) {
+            return util::str_response(StatusCode::NOT_FOUND, "User not found");
+        }
+    }
+
+    match db.get_user_by_gd_id(id).await {
+        Some(user) => util::response(
+            StatusCode::OK,
+            serde_json::json!({
+                "status": StatusCode::OK.as_u16(),
+                "data": user,
+            }),
+        ),
+        None => util::str_response(StatusCode::NOT_FOUND, "User not found"),
+    }
+}
+
 #[derive(Debug, Default, Deserialize)]
 pub struct HistoryQueryParams {
     pub months: Option<i64>,
