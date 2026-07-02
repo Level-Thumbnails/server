@@ -198,10 +198,6 @@ pub async fn upload(
         }
     };
 
-    let Some(value) = headers.get(SUBMISSION_NOTE_HEADER) else {
-        return util::str_response(StatusCode::BAD_REQUEST, "Missing submission note header");
-    };
-
     let ua = match util::parse_useragent(&headers) {
         Some(ua) => {
             if db.settings.read().await.min_supported_client.is_newer_than(&ua.version) {
@@ -221,6 +217,10 @@ pub async fn upload(
                 "Your game version is not supported. Please update Geometry Dash and install the latest version of Level Thumbnails mod.",
             );
         }
+    };
+    
+    let Some(value) = headers.get(SUBMISSION_NOTE_HEADER) else {
+        return util::str_response(StatusCode::BAD_REQUEST, "Missing submission note header");
     };
 
     let note = match util::parse_submission_note(value.to_str().unwrap_or_default()) {
