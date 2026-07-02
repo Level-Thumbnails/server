@@ -66,8 +66,8 @@ pub fn parse_submission_note(raw: &str) -> Result<ParsedSubmissionNote, String> 
     let mut length = None;
     let mut rating = None;
     let mut difficulty = None;
-    let mut percentage = None;
-    let mut attempt_time = None;
+    let mut percentage: Option<f32> = None;
+    let mut attempt_time: Option<f64> = None;
     let mut message = None;
 
     for part in trimmed.split(';') {
@@ -114,6 +114,14 @@ pub fn parse_submission_note(raw: &str) -> Result<ParsedSubmissionNote, String> 
         || attempt_time.is_none()
     {
         return Err("Missing required fields in submission note".to_string());
+    }
+
+    if !percentage.unwrap_or_default().is_finite() {
+        percentage = Some(-1.0);
+    }
+
+    if !attempt_time.unwrap_or_default().is_finite() {
+        attempt_time = Some(-1.0);
     }
 
     Ok(ParsedSubmissionNote {
