@@ -607,6 +607,14 @@ pub struct UserHistoryPoint {
     pub accepted_level_count: i64,
 }
 
+#[derive(Debug, Clone, FromRow, Serialize, Deserialize)]
+pub struct BadgeLists {
+    pub verified: Vec<i64>,
+    pub moderator: Vec<i64>,
+    pub admin: Vec<i64>,
+    pub owner: Vec<i64>,
+}
+
 fn month_start(date: NaiveDate) -> NaiveDate {
     NaiveDate::from_ymd_opt(date.year(), date.month(), 1).expect("invalid month start")
 }
@@ -1808,6 +1816,22 @@ impl AppState {
         .await?;
 
         Ok(result.rows_affected() > 0)
+    }
+
+    pub async fn get_all_badges(&self) -> Result<BadgeLists, sqlx::Error> {
+        sqlx::query_as::<_, BadgeLists>(
+            r#"
+            SELECT
+                COALESCE(array_agg(account_id) FILTER (WHERE role = 'verified'), '{}') AS verified,
+                COALESCE(array_agg(account_id) FILTER (WHERE role = 'moderator'), '{}') AS moderator,
+                COALESCE(array_agg(account_id) FILTER (WHERE role = 'admin'), '{}') AS admin,
+                COALESCE(array_agg(account_id) FILTER (WHERE role = 'owner'), '{}') AS owner
+            FROM users
+            WHERE account_id > 0
+            "#
+        )
+            .fetch_one(&*self.pool)
+            .await
     }
 }
 

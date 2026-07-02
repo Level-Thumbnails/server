@@ -162,6 +162,7 @@ async fn main() {
         // .route("/user/me", delete(user::delete_me))
         .route("/user/{id}", get(user::get_user_by_id))
         .route("/user/gd/{id}", get(user::get_user_by_gd_id))
+        .route("/user/badges", get(user::get_user_badges))
         .route("/user/{id}/history", get(user::get_user_history))
         // .route("/user/{id}/uploads", get(routes::user::get_user_uploads))
         // /upload

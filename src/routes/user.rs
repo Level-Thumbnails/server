@@ -315,3 +315,22 @@ where
     )
 }
 
+pub async fn get_user_badges(State(db): State<database::AppState>) -> Response {
+    let badges = match db.get_all_badges().await {
+        Ok(badges) => badges,
+        Err(e) => {
+            return util::str_response(
+                StatusCode::INTERNAL_SERVER_ERROR,
+                &format!("Failed to fetch user badges: {}", e)
+            );
+        }
+    };
+
+    util::response(
+        StatusCode::OK,
+        serde_json::json!({
+            "status": StatusCode::OK.as_u16(),
+            "data": badges,
+        }),
+    )
+}
