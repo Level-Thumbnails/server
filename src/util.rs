@@ -1,3 +1,4 @@
+use std::path::Path;
 use crate::auth::UserSession;
 use crate::db;
 use axum::http::{HeaderMap, StatusCode, header};
@@ -387,4 +388,23 @@ pub fn parse_useragent(headers: &HeaderMap) -> Option<ModUserAgent> {
 
         Some(ModUserAgent { platform, version })
     })
+}
+
+pub const NUM_SHARDS: i64 = 256;
+
+pub fn get_shard_id(id: i64) -> i64 {
+    id.rem_euclid(NUM_SHARDS)
+}
+
+pub fn get_upload_path(id: i64) -> String {
+    let shard_id = get_shard_id(id);
+    format!("uploads/{:02x}/{}.webp", shard_id, id)
+}
+
+pub async fn move_file_with_dirs(src: &Path, dest: &Path) -> Result<(), std::io::Error> {
+    if let Some(parent) = dest.parent() {
+        tokio::fs::create_dir_all(parent).await?;
+    }
+    tokio::fs::rename(src, dest).await?;
+    Ok(())
 }

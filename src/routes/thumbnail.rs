@@ -296,6 +296,7 @@ pub async fn thumbnail_info_handler(
 
 pub async fn handle_random(res: Res) -> Response {
     // pick random id from directory
+    // TODO: cache the list of ids in memory to avoid reading the directory every time
     match tokio::fs::read_dir("thumbnails").await {
         Ok(mut entries) => {
             let mut ids: Vec<u64> = Vec::new();

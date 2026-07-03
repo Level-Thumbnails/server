@@ -149,6 +149,7 @@ pub struct PendingUpload {
     pub level_id: i64,
     pub accepted: bool,
     pub upload_time: NaiveDateTime,
+    pub accepted_time: Option<NaiveDateTime>,
 
     pub note_data: Option<Json<NoteData>>,
     pub account_id: Option<i64>,

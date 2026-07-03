@@ -433,6 +433,13 @@ onMounted(() => {
       </div>
       <div v-else class="rejected-grid">
         <article v-for="item in rejectedItems" :key="item.id" class="rejected-card">
+          <button
+              type="button"
+              class="thumbnail-link"
+              @click="openPreview(getPendingImageUrl(item.id), levelTitle(item))"
+          >
+            <img :src="getPendingImageUrl(item.id)" :alt="`Pending upload ${item.id}`" class="thumbnail-image" loading="lazy" onerror="this.style.display='none'"/>
+          </button>
           <div class="rejected-header">
             <div>
               <strong class="level-heading">

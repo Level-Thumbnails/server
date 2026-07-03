@@ -91,15 +91,20 @@ async fn force_save(
     user: &db::User,
     db: &db::AppState,
 ) -> Result<(), String> {
-    let image_path = format!("thumbnails/{}.webp", id);
+    let upload_id = db.add_upload(id as i64, user.id, "", true, submission_note)
+        .await
+        .map_err(|e| format!("Failed to add upload entry: {}", e))?;
 
+    let image_path = util::get_upload_path(upload_id);
     tokio::fs::write(&image_path, image_data)
         .await
         .map_err(|e| format!("Failed to save image: {}", e))?;
 
-    db.add_upload(id as i64, user.id, &image_path, true, submission_note)
+    let new_image_path = format!("thumbnails/{}.webp", id);
+    let _ = tokio::fs::remove_file(&new_image_path).await;
+    tokio::fs::hard_link(&image_path, &new_image_path)
         .await
-        .map_err(|e| format!("Failed to add upload entry: {}", e))?;
+        .map_err(|e| format!("Failed to move image to final location: {}", e))?;
 
     cache_controller::purge(id as i64);
     thumbnail::purge_resize_cache(id as i64).await;
@@ -116,27 +121,30 @@ async fn add_to_pending(
     if db.settings.read().await.pause_submissions {
         return util::str_response(
             StatusCode::SERVICE_UNAVAILABLE,
-            "Thumbnail submissions are currently closed because there are too many submissions. Please wait for thumbnail moderators to clear the queue, and then submissions will reopen.",
+            "Thumbnail submissions are currently closed because there are too many submissions. \
+            Please wait for thumbnail moderators to clear the queue, and then submissions will reopen.",
         );
     }
 
-    let image_path = format!("uploads/{}_{}.webp", user.id, id);
+    match db.add_upload(id as i64, user.id, "", false, submission_note).await {
+        Ok(upload_id) => {
+            let image_path = util::get_upload_path(upload_id);
+            match tokio::fs::write(&image_path, image_data).await {
+                Ok(_) => {}
+                Err(e) => {
+                    // TODO: should probably roll back the upload entry here
+                    return util::str_response(
+                        StatusCode::INTERNAL_SERVER_ERROR,
+                        &format!("Failed to save pending image: {}", e),
+                    );
+                }
+            }
 
-    match tokio::fs::write(&image_path, image_data).await {
-        Ok(_) => {}
-        Err(e) => {
-            return util::str_response(
-                StatusCode::INTERNAL_SERVER_ERROR,
-                &format!("Failed to save pending image: {}", e),
-            );
-        }
-    }
-
-    match db.add_upload(id as i64, user.id, &image_path, false, submission_note).await {
-        Ok(_) => util::str_response(
-            StatusCode::ACCEPTED,
-            &format!("Image for level ID {} is now pending", id),
-        ),
+            util::str_response(
+                StatusCode::ACCEPTED,
+                &format!("Image for level ID {} is now pending", id),
+            )
+        },
         Err(e) => util::str_response(
             StatusCode::INTERNAL_SERVER_ERROR,
             &format!("Failed to add pending upload entry: {}", e),
@@ -487,6 +495,14 @@ pub async fn pending_action(
         Err(response) => return response,
     };
 
+    let old_image_path = util::get_upload_path(id);
+    if !tokio::fs::try_exists(&old_image_path).await.unwrap_or(false) {
+        return util::str_response(
+            StatusCode::NOT_FOUND,
+            &format!("No pending image found for upload ID {}", id),
+        );
+    }
+
     let upload = match db.get_pending_upload(id).await {
         Ok(upload) => upload,
         Err(e) => {
@@ -497,17 +513,19 @@ pub async fn pending_action(
         }
     };
 
-    if upload.accepted {
-        return util::str_response(StatusCode::CONFLICT, "This upload has already been accepted");
+    if upload.accepted_time.is_some() {
+        return util::str_response(
+            StatusCode::CONFLICT,
+            "This upload has already been reviewed"
+        );
     }
 
-    let old_image_path = format!("uploads/{}_{}.webp", upload.user_id, upload.level_id);
-
     if action.accepted {
-        // Accept: move image from uploads to thumbnails
+        // Accept: hard link the image to the new location
         let new_image_path = format!("thumbnails/{}.webp", upload.level_id);
 
-        if let Err(e) = tokio::fs::rename(&old_image_path, &new_image_path).await {
+        let _ = tokio::fs::remove_file(&new_image_path).await;
+        if let Err(e) = tokio::fs::hard_link(&old_image_path, &new_image_path).await {
             return util::str_response(
                 StatusCode::INTERNAL_SERVER_ERROR,
                 &format!("Error moving image: {}", e),
@@ -525,17 +543,7 @@ pub async fn pending_action(
         thumbnail::purge_resize_cache(upload.level_id).await;
         util::str_response(StatusCode::OK, &format!("Upload {} accepted", id))
     } else {
-        // Reject: delete the pending image
-        if let Err(e) = tokio::fs::remove_file(&old_image_path).await {
-            // if the file doesn't exist, we can ignore the error
-            if e.kind() != std::io::ErrorKind::NotFound {
-                return util::str_response(
-                    StatusCode::INTERNAL_SERVER_ERROR,
-                    &format!("Error deleting image: {}", e),
-                );
-            }
-        }
-
+        // Reject: don't touch the image, just mark it as rejected
         if let Err(e) = db.accept_upload(upload.id, user.id, action.reason, false).await {
             return util::str_response(
                 StatusCode::INTERNAL_SERVER_ERROR,
@@ -574,7 +582,7 @@ pub async fn get_pending_image(
         );
     }
 
-    let image_path = format!("uploads/{}_{}.webp", upload.user_id, upload.level_id);
+    let image_path = util::get_upload_path(id);
     let image_data = match tokio::fs::read(&image_path).await {
         Ok(data) => data,
         Err(e) => {

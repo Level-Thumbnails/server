@@ -109,6 +109,79 @@ async fn migrate_submission_notes(pool: &sqlx::Pool<Postgres>) {
     }
 }
 
+async fn migrate_hardlink_storage(pool: &sqlx::Pool<Postgres>) {
+    let migrated: bool = sqlx::query_scalar(
+        "SELECT COALESCE((SELECT hardlink_storage_migrated FROM migration_state LIMIT 1), FALSE)"
+    )
+        .fetch_one(pool)
+        .await
+        .expect("Failed to check hardlink_storage_migrated");
+
+    if migrated {
+        return;
+    }
+
+    println!("Performing storage migration...");
+    warn!("Performing storage migration...");
+
+    let uploads: Vec<(i64, i64)> = sqlx::query_as(
+        "WITH active_uploads AS (
+                SELECT DISTINCT ON (uploads.level_id)
+                    uploads.id,
+                    uploads.level_id
+                FROM uploads
+                LEFT JOIN notes ON uploads.id = notes.upload_id
+                WHERE uploads.accepted = TRUE AND uploads.deleted_at IS NULL
+                ORDER BY uploads.level_id, uploads.upload_time DESC, uploads.id DESC
+            )
+            SELECT id, level_id
+            FROM active_uploads"
+    )
+        .fetch_all(pool)
+        .await
+        .expect("Failed to fetch active uploads");
+
+    for (upload_id, level_id) in uploads {
+        let old_path = format!("thumbnails/{}.webp", level_id);
+        let new_path = util::get_upload_path(upload_id);
+
+        if let Err(e) = util::move_file_with_dirs(Path::new(&old_path), Path::new(&new_path)).await {
+            error!("Failed to migrate upload {} for level {}: {}", upload_id, level_id, e);
+            continue;
+        }
+
+        if let Err(e) = tokio::fs::hard_link(&new_path, &old_path).await {
+            error!("Failed to create hard link for upload {} for level {}: {}", upload_id, level_id, e);
+            continue;
+        }
+    }
+
+    let pending_uploads: Vec<(i64, i64, i64)> = sqlx::query_as(
+        "SELECT id, user_id, level_id FROM uploads WHERE accepted = FALSE AND accepted_time IS NULL"
+    )
+        .fetch_all(pool)
+        .await
+        .expect("Failed to fetch pending uploads");
+
+    for (upload_id, user_id, level_id) in pending_uploads {
+        let old_path = format!("uploads/{}_{}.webp", user_id, level_id);
+        let new_path = util::get_upload_path(upload_id);
+
+        if let Err(e) = util::move_file_with_dirs(Path::new(&old_path), Path::new(&new_path)).await {
+            error!("Failed to migrate pending upload {} for level {}: {}", upload_id, level_id, e);
+            continue;
+        }
+    }
+
+    sqlx::query("INSERT INTO migration_state (hardlink_storage_migrated) VALUES (TRUE)")
+        .execute(pool)
+        .await
+        .expect("Failed to set hardlink_storage_migrated");
+
+    println!("Storage migration completed successfully!");
+    warn!("Storage migration completed successfully!");
+}
+
 impl AppState {
     pub async fn new() -> Self {
         let connection_string = dotenv::var("DATABASE_URL").expect("DATABASE_URL must be set");
@@ -122,6 +195,7 @@ impl AppState {
         sqlx::migrate!("./migrations").run(&pool).await.expect("Failed to run migrations");
 
         migrate_submission_notes(&pool).await;
+        migrate_hardlink_storage(&pool).await;
 
         // load settings from state.json or create default
         let settings = if let Ok(settings_data) = tokio::fs::read_to_string("state.json").await {
@@ -356,7 +430,7 @@ impl AppState {
         image_path: &str,
         accepted: bool,
         submission_note: NoteData,
-    ) -> Result<(), sqlx::Error> {
+    ) -> Result<i64, sqlx::Error> {
         let upload_id: i64 = if accepted {
             sqlx::query_scalar(
                 "INSERT INTO uploads (level_id, user_id, image_path, accepted, accepted_time, accepted_by)
@@ -423,7 +497,7 @@ impl AppState {
             .execute(&*self.pool)
             .await?;
 
-        Ok(())
+        Ok(upload_id)
     }
 
     pub async fn get_level_lock(&self, level_id: i64) -> Result<Option<LevelLock>, sqlx::Error> {
@@ -782,10 +856,23 @@ impl AppState {
     }
 
     pub async fn get_pending_upload(&self, id: i64) -> Result<PendingUpload, sqlx::Error> {
-        sqlx::query_as::<_, PendingUpload>(&format!(
-            "{} AND uploads.id = $1",
-            PENDING_UPLOAD_SELECT
-        ))
+        sqlx::query_as::<_, PendingUpload>(
+            r#"SELECT
+                uploads.id,
+                user_id,
+                users.username AS username,
+                level_id,
+                accepted,
+                upload_time,
+                accepted_time,
+                users.account_id AS account_id,
+                users.role AS user_role,
+                row_to_json(notes) AS note_data
+            FROM uploads
+            LEFT JOIN users ON users.id = user_id
+            LEFT JOIN notes ON notes.upload_id = uploads.id
+            WHERE uploads.id = $1"#
+        )
             .bind(id)
             .fetch_one(&*self.pool)
             .await

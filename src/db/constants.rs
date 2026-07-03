@@ -1,4 +1,4 @@
-pub const PENDING_UPLOAD_SELECT: &str = "SELECT uploads.id, user_id, users.username AS username, level_id, accepted, upload_time, users.account_id AS account_id, users.role AS user_role, \
+pub const PENDING_UPLOAD_SELECT: &str = "SELECT uploads.id, user_id, users.username AS username, level_id, accepted, upload_time, accepted_time, users.account_id AS account_id, users.role AS user_role, \
      row_to_json(notes) AS note_data
      FROM uploads \
      LEFT JOIN users ON users.id = user_id \
