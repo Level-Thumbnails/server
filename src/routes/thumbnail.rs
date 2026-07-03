@@ -1,4 +1,4 @@
-use crate::{database, util};
+use crate::{db, util};
 use axum::extract::{Path, State};
 use axum::http::{StatusCode, header};
 use axum::response::Response;
@@ -69,7 +69,7 @@ pub async fn purge_resize_cache(id: i64) {
     }
 }
 
-fn image_response(image_data: Vec<u8>, id: u64, upload_info: &database::UploadInfo) -> Response {
+fn image_response(image_data: Vec<u8>, id: u64, upload_info: &db::UploadInfo) -> Response {
     Response::builder()
         .header(header::CONTENT_TYPE, "image/webp")
         .header(header::CONTENT_DISPOSITION, format!("inline; filename=\"{}.webp\"", id))
@@ -83,9 +83,9 @@ fn image_response(image_data: Vec<u8>, id: u64, upload_info: &database::UploadIn
 }
 
 async fn get_upload_info(
-    db: &database::AppState,
+    db: &db::AppState,
     id: u64,
-) -> Result<database::UploadInfo, Response> {
+) -> Result<db::UploadInfo, Response> {
     match db.get_upload_info(id as i64).await {
         Some(upload) => Ok(upload),
         None => Err(util::str_response(StatusCode::NOT_FOUND, "Image not found")),
@@ -127,7 +127,7 @@ async fn resize_image(image_path: PathBuf, target_res: Res) -> Result<Vec<u8>, R
     })
 }
 
-async fn handle_image(id: u64, res: Res, db: database::AppState) -> Response {
+async fn handle_image(id: u64, res: Res, db: db::AppState) -> Response {
     // info!("Handling image request for ID: {}, Resolution: {:?}", id, res);
 
     // Check if image file exists
@@ -206,7 +206,7 @@ async fn handle_image(id: u64, res: Res, db: database::AppState) -> Response {
 )]
 pub async fn image_handler_with_res(
     Path((id, res)): Path<(u64, Res)>,
-    State(db): State<database::AppState>,
+    State(db): State<db::AppState>,
 ) -> Response {
     handle_image(id, res, db).await
 }
@@ -242,7 +242,7 @@ pub async fn image_handler_with_res(
 )]
 pub async fn image_handler_default(
     Path(id): Path<u64>,
-    State(db): State<database::AppState>,
+    State(db): State<db::AppState>,
 ) -> Response {
     handle_image(id, Res::High, db).await
 }
@@ -259,7 +259,7 @@ pub async fn image_handler_default(
         (
             status = 200,
             description = "Thumbnail metadata in JSON format",
-            body = database::UploadExtended,
+            body = db::UploadExtended,
             example = json!({
                 "level_id": 1,
                 "account_id": 9598348,
@@ -281,7 +281,7 @@ pub async fn image_handler_default(
 )]
 pub async fn thumbnail_info_handler(
     Path(id): Path<u64>,
-    State(db): State<database::AppState>,
+    State(db): State<db::AppState>,
 ) -> Response {
     match db.get_upload_extended(id as i64).await {
         Some(upload) => Response::builder()

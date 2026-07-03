@@ -1,4 +1,4 @@
-use crate::{auth, database, util};
+use crate::{auth, db, util};
 use auth::UserSession;
 use axum::Json;
 use axum::extract::{Query, State};
@@ -36,7 +36,7 @@ fn handle_verdict_error(verdict: auth::Verdict) -> Response {
 }
 
 pub async fn login(
-    State(db): State<database::AppState>,
+    State(db): State<db::AppState>,
     Json(payload): Json<LoginPayload>,
 ) -> Response {
     // Validate argon token
@@ -98,7 +98,7 @@ pub struct DiscordOAuthPayload {
 
 pub async fn discord_oauth_handler(
     Query(query): Query<DiscordOAuthPayload>,
-    State(db): State<database::AppState>,
+    State(db): State<db::AppState>,
 ) -> Response {
     if query.code.is_empty() {
         return util::str_response(StatusCode::BAD_REQUEST, "Missing code parameter");
@@ -206,7 +206,7 @@ pub async fn discord_oauth_handler(
     }
 }
 
-pub async fn get_session(headers: HeaderMap, State(db): State<database::AppState>) -> Response {
+pub async fn get_session(headers: HeaderMap, State(db): State<db::AppState>) -> Response {
     match util::auth_middleware(&headers, &db).await {
         Ok(user) => util::response(
             StatusCode::OK,
@@ -225,7 +225,7 @@ struct LinkToken {
     exp: u64,
 }
 
-pub async fn get_link_token(headers: HeaderMap, State(db): State<database::AppState>) -> Response {
+pub async fn get_link_token(headers: HeaderMap, State(db): State<db::AppState>) -> Response {
     match util::auth_middleware(&headers, &db).await {
         Ok(user) => {
             if user.account_id != -1 {
@@ -267,7 +267,7 @@ pub struct LinkPayload {
 }
 
 async fn migrate_account(
-    db: &database::AppState,
+    db: &db::AppState,
     user_id: i64,    // Geometry Dash user ID
     discord_id: i64, // Discord user ID
 ) -> Response {
@@ -311,7 +311,7 @@ async fn migrate_account(
 
 pub async fn link_account(
     headers: HeaderMap,
-    State(db): State<database::AppState>,
+    State(db): State<db::AppState>,
     Json(payload): Json<LinkPayload>,
 ) -> Response {
     match util::auth_middleware(&headers, &db).await {

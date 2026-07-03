@@ -1,5 +1,5 @@
 use crate::auth::UserSession;
-use crate::database;
+use crate::db;
 use axum::http::{HeaderMap, StatusCode, header};
 use axum::response::Response;
 use serde::{Deserialize, Serialize};
@@ -167,8 +167,8 @@ fn try_read_cookie(headers: &HeaderMap, cookie_name: &str) -> Option<String> {
 
 async fn session_response(
     token: &str,
-    db: &database::AppState,
-) -> Result<database::User, Response> {
+    db: &db::AppState,
+) -> Result<db::User, Response> {
     match UserSession::from_jwt(token) {
         Ok(session) => match db.get_user_by_id(session.id).await {
             Some(user) => Ok(user),
@@ -183,8 +183,8 @@ async fn session_response(
 
 pub async fn auth_middleware(
     headers: &HeaderMap,
-    db: &database::AppState,
-) -> Result<database::User, Response> {
+    db: &db::AppState,
+) -> Result<db::User, Response> {
     match headers.get("Authorization").and_then(|h| h.to_str().ok()) {
         Some(token) => session_response(token, db).await,
         None => {

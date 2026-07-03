@@ -14,9 +14,9 @@ use utoipa_swagger_ui::SwaggerUi;
 
 mod auth;
 mod cache_controller;
-mod database;
 mod routes;
 mod util;
+pub mod db;
 
 use routes::{admin, login, stats, thumbnail, upload, user};
 
@@ -74,15 +74,15 @@ impl Modify for SecurityAddon {
             // stats
             stats::ServerStats,
             stats::StatsResponse,
-            database::StatsSnapshot,
+            db::StatsSnapshot,
             stats::StatsHistoryResponse,
 
             // thumbnails
             thumbnail::Res,
-            database::UploadExtended,
+            db::UploadExtended,
 
             // upload
-            database::LevelLock,
+            db::LevelLock,
             upload::AllLevelLocksResponse,
             upload::LockLevelPayload,
             upload::LevelLockResponse
@@ -125,7 +125,7 @@ async fn main() {
         .allow_methods(cors::Any)
         .allow_headers(cors::Any);
 
-    let db = database::get_db().await;
+    let db = db::get_db().await;
 
     let snapshot_db = db.clone();
     tokio::spawn(async move {
@@ -213,7 +213,7 @@ async fn get_dir_stats(path: &Path) -> Result<(u64, usize), std::io::Error> {
 }
 
 
-async fn stats_snapshot_loop(db: database::AppState) {
+async fn stats_snapshot_loop(db: db::AppState) {
     let interval_minutes = dotenv::var("STATS_SNAPSHOT_INTERVAL_MINUTES")
         .ok()
         .and_then(|value| value.parse::<u64>().ok())
@@ -231,7 +231,7 @@ async fn stats_snapshot_loop(db: database::AppState) {
     }
 }
 
-async fn create_stats_snapshot(db: &database::AppState) -> Result<(), String> {
+async fn create_stats_snapshot(db: &db::AppState) -> Result<(), String> {
     let (storage_size, thumbnails_count) = get_dir_stats(Path::new("thumbnails"))
         .await
         .map_err(|e| format!("Failed to collect thumbnail storage stats: {}", e))?;

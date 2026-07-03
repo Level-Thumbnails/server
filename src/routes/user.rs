@@ -1,4 +1,4 @@
-use crate::{database, util};
+use crate::{db, util};
 use axum::extract::{Path, Query, State};
 use axum::http::{HeaderMap, StatusCode};
 use axum::response::Response;
@@ -10,22 +10,22 @@ trait MyUploadsPageLike<T> {
     fn total(&self) -> i64;
 }
 
-impl MyUploadsPageLike<database::ActiveUpload> for database::ActiveUploadsPage {
-    fn uploads(self) -> Vec<database::ActiveUpload> { self.uploads }
+impl MyUploadsPageLike<db::ActiveUpload> for db::ActiveUploadsPage {
+    fn uploads(self) -> Vec<db::ActiveUpload> { self.uploads }
     fn total(&self) -> i64 { self.total }
 }
 
-impl MyUploadsPageLike<database::PendingUpload> for database::PendingUploadsPage {
-    fn uploads(self) -> Vec<database::PendingUpload> { self.uploads }
+impl MyUploadsPageLike<db::PendingUpload> for db::PendingUploadsPage {
+    fn uploads(self) -> Vec<db::PendingUpload> { self.uploads }
     fn total(&self) -> i64 { self.total }
 }
 
-impl MyUploadsPageLike<database::RejectedUpload> for database::RejectedUploadsPage {
-    fn uploads(self) -> Vec<database::RejectedUpload> { self.uploads }
+impl MyUploadsPageLike<db::RejectedUpload> for db::RejectedUploadsPage {
+    fn uploads(self) -> Vec<db::RejectedUpload> { self.uploads }
     fn total(&self) -> i64 { self.total }
 }
 
-pub async fn get_user_info(id: i64, db: &database::AppState) -> Response {
+pub async fn get_user_info(id: i64, db: &db::AppState) -> Response {
     match db.get_user_stats(id).await {
         Some(user) => util::response(
             StatusCode::OK,
@@ -38,18 +38,18 @@ pub async fn get_user_info(id: i64, db: &database::AppState) -> Response {
     }
 }
 
-pub async fn get_me(headers: HeaderMap, State(db): State<database::AppState>) -> Response {
+pub async fn get_me(headers: HeaderMap, State(db): State<db::AppState>) -> Response {
     match util::auth_middleware(&headers, &db).await {
         Ok(user) => get_user_info(user.id, &db).await,
         Err(response) => response,
     }
 }
 
-pub async fn get_user_by_id(Path(id): Path<i64>, State(db): State<database::AppState>) -> Response {
+pub async fn get_user_by_id(Path(id): Path<i64>, State(db): State<db::AppState>) -> Response {
     get_user_info(id, &db).await
 }
 
-pub async fn get_user_by_gd_id(Path(id): Path<i64>, State(db): State<database::AppState>) -> Response {
+pub async fn get_user_by_gd_id(Path(id): Path<i64>, State(db): State<db::AppState>) -> Response {
     if id <= 0 {
         return util::str_response(StatusCode::BAD_REQUEST, "Invalid GD user ID");
     }
@@ -81,7 +81,7 @@ pub struct HistoryQueryParams {
 async fn get_history_response(
     user_id: i64,
     months: i64,
-    db: &database::AppState,
+    db: &db::AppState,
 ) -> Response {
     match db.get_user_history(user_id, months).await {
         Ok(history) => util::response(
@@ -101,7 +101,7 @@ async fn get_history_response(
 pub async fn get_me_history(
     headers: HeaderMap,
     Query(params): Query<HistoryQueryParams>,
-    State(db): State<database::AppState>,
+    State(db): State<db::AppState>,
 ) -> Response {
     match util::auth_middleware(&headers, &db).await {
         Ok(user) => get_history_response(user.id, params.months.unwrap_or(12), &db).await,
@@ -113,7 +113,7 @@ pub async fn get_user_history(
     headers: HeaderMap,
     Path(id): Path<i64>,
     Query(params): Query<HistoryQueryParams>,
-    State(db): State<database::AppState>,
+    State(db): State<db::AppState>,
 ) -> Response {
     match util::auth_middleware(&headers, &db).await {
         Ok(user) => {
@@ -164,7 +164,7 @@ impl MyUploadsQueryParams {
 pub async fn get_my_active_uploads(
     headers: HeaderMap,
     Query(params): Query<MyUploadsQueryParams>,
-    State(db): State<database::AppState>,
+    State(db): State<db::AppState>,
 ) -> Response {
     get_my_uploads_page_response(
         headers,
@@ -193,7 +193,7 @@ pub struct MyUploadsSummaryResponse {
 pub async fn get_my_upload_summary(
     headers: HeaderMap,
     Query(params): Query<MyUploadsQueryParams>,
-    State(db): State<database::AppState>,
+    State(db): State<db::AppState>,
 ) -> Response {
     let user = match util::auth_middleware(&headers, &db).await {
         Ok(user) => user,
@@ -224,7 +224,7 @@ pub async fn get_my_upload_summary(
 pub async fn get_my_pending_uploads(
     headers: HeaderMap,
     Query(params): Query<MyUploadsQueryParams>,
-    State(db): State<database::AppState>,
+    State(db): State<db::AppState>,
 ) -> Response {
     get_my_uploads_page_response(
         headers,
@@ -232,7 +232,7 @@ pub async fn get_my_pending_uploads(
         State(db),
         "Failed to fetch pending uploads",
         |user_id, params, db| async move {
-            db.get_pending_uploads_paginated(database::PendingQueryOptions {
+            db.get_pending_uploads_paginated(db::PendingQueryOptions {
                 page: params.page,
                 per_page: params.per_page,
                 level_id: params.level_id_search.and_then(|s| s.parse::<i64>().ok()),
@@ -248,7 +248,7 @@ pub async fn get_my_pending_uploads(
 pub async fn get_my_rejected_uploads(
     headers: HeaderMap,
     Query(params): Query<MyUploadsQueryParams>,
-    State(db): State<database::AppState>,
+    State(db): State<db::AppState>,
 ) -> Response {
     get_my_uploads_page_response(
         headers,
@@ -271,14 +271,14 @@ pub async fn get_my_rejected_uploads(
 async fn get_my_uploads_page_response<T, P, F, Fut>(
     headers: HeaderMap,
     Query(params): Query<MyUploadsQueryParams>,
-    State(db): State<database::AppState>,
+    State(db): State<db::AppState>,
     error_label: &'static str,
     fetcher: F,
 ) -> Response
 where
     T: Serialize,
     P: MyUploadsPageLike<T>,
-    F: FnOnce(i64, MyUploadsQueryParams, database::AppState) -> Fut,
+    F: FnOnce(i64, MyUploadsQueryParams, db::AppState) -> Fut,
     Fut: Future<Output = Result<P, sqlx::Error>>,
 {
     let user = match util::auth_middleware(&headers, &db).await {
@@ -315,7 +315,7 @@ where
     )
 }
 
-pub async fn get_user_badges(State(db): State<database::AppState>) -> Response {
+pub async fn get_user_badges(State(db): State<db::AppState>) -> Response {
     let badges = match db.get_all_badges().await {
         Ok(badges) => badges,
         Err(e) => {

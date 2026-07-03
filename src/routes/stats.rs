@@ -1,4 +1,4 @@
-use crate::{database, util};
+use crate::{db, util};
 use axum::extract::{Query, State};
 use axum::http::StatusCode;
 use axum::response::Response;
@@ -76,7 +76,7 @@ pub struct StatsResponse {
         ),
     )
 )]
-pub async fn get_stats(State(db): State<database::AppState>) -> Response {
+pub async fn get_stats(State(db): State<db::AppState>) -> Response {
     let latest_snapshot = match db.get_recent_stats_snapshots(1).await {
         Ok(mut snapshots) => snapshots.pop(),
         Err(e) => {
@@ -146,7 +146,7 @@ pub struct StatsHistoryResponse {
     /// HTTP status code
     pub status: u16,
     /// Payload data
-    pub data: Vec<database::StatsSnapshot>,
+    pub data: Vec<db::StatsSnapshot>,
 }
 
 #[utoipa::path(
@@ -187,7 +187,7 @@ pub struct StatsHistoryResponse {
 )]
 pub async fn get_stats_history(
     Query(params): Query<StatsHistoryQueryParams>,
-    State(db): State<database::AppState>,
+    State(db): State<db::AppState>,
 ) -> Response {
     let limit = params.limit.unwrap_or(72).clamp(1, 720);
 

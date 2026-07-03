@@ -1,6 +1,6 @@
 use crate::routes::thumbnail;
 use crate::util::MessageResponse;
-use crate::{cache_controller, database, util};
+use crate::{cache_controller, db, util};
 use axum::Json;
 use axum::body::Bytes;
 use axum::extract::{Path, Query, State};
@@ -10,7 +10,7 @@ use serde::{Deserialize, Serialize};
 use serde_json::json;
 use std::cmp::PartialEq;
 use webp::Encoder;
-use database::NoteData;
+use db::NoteData;
 
 const IMAGE_WIDTH: u32 = 1920;
 const IMAGE_HEIGHT: u32 = 1080;
@@ -30,14 +30,14 @@ pub struct LevelLockResponse {
     /// HTTP status code of the response
     pub status: u16,
     /// Level lock information. Null if the level is not currently locked.
-    pub data: Option<database::LevelLock>,
+    pub data: Option<db::LevelLock>,
 }
 
 /// Helper function to authenticate moderator/admin
 async fn authenticate_moderator(
     headers: &HeaderMap,
-    db: &database::AppState,
-) -> Result<database::User, Response> {
+    db: &db::AppState,
+) -> Result<db::User, Response> {
     let user = util::auth_middleware(headers, db).await?;
 
     if !user.role.can_moderate_pending_uploads() {
@@ -54,8 +54,8 @@ async fn authenticate_moderator(
 
 async fn authenticate_admin(
     headers: &HeaderMap,
-    db: &database::AppState,
-) -> Result<database::User, Response> {
+    db: &db::AppState,
+) -> Result<db::User, Response> {
     let user = util::auth_middleware(headers, db).await?;
 
     if !user.role.can_manage_level_locks() {
@@ -88,8 +88,8 @@ async fn force_save(
     id: u64,
     image_data: &[u8],
     submission_note: NoteData,
-    user: &database::User,
-    db: &database::AppState,
+    user: &db::User,
+    db: &db::AppState,
 ) -> Result<(), String> {
     let image_path = format!("thumbnails/{}.webp", id);
 
@@ -110,8 +110,8 @@ async fn add_to_pending(
     id: u64,
     image_data: &[u8],
     submission_note: NoteData,
-    user: &database::User,
-    db: &database::AppState,
+    user: &db::User,
+    db: &db::AppState,
 ) -> Response {
     if db.settings.read().await.pause_submissions {
         return util::str_response(
@@ -144,13 +144,13 @@ async fn add_to_pending(
     }
 }
 
-async fn is_image_uploaded(id: u64) -> bool {
+pub async fn is_image_uploaded(id: u64) -> bool {
     let image_path = format!("thumbnails/{}.webp", id);
     tokio::fs::try_exists(&image_path).await.unwrap_or(false)
 }
 
 pub async fn upload(
-    State(db): State<database::AppState>,
+    State(db): State<db::AppState>,
     headers: HeaderMap,
     Path(id): Path<u64>,
     data: Bytes,
@@ -340,7 +340,7 @@ impl PendingQueryParams {
 
 #[derive(Serialize)]
 struct PendingUploadsResponse {
-    uploads: Vec<database::PendingUpload>,
+    uploads: Vec<db::PendingUpload>,
     page: u32,
     per_page: u32,
     total: i64,
@@ -348,7 +348,7 @@ struct PendingUploadsResponse {
 
 async fn get_pending_uploads(
     headers: HeaderMap,
-    db: &database::AppState,
+    db: &db::AppState,
     filter: PendingFilter,
     query: PendingQueryParams,
 ) -> Response {
@@ -381,7 +381,7 @@ async fn get_pending_uploads(
         PendingFilter::All => {}
     }
 
-    let options = database::PendingQueryOptions {
+    let options = db::PendingQueryOptions {
         page: sanitized_query.page,
         per_page: sanitized_query.per_page,
         level_id: sanitized_query.level_id,
@@ -419,7 +419,7 @@ async fn get_pending_uploads(
 
 pub async fn get_pending_uploads_for_level(
     headers: HeaderMap,
-    State(db): State<database::AppState>,
+    State(db): State<db::AppState>,
     Path(id): Path<i64>,
     Query(params): Query<PendingQueryParams>,
 ) -> Response {
@@ -428,7 +428,7 @@ pub async fn get_pending_uploads_for_level(
 
 pub async fn get_all_pending_uploads(
     headers: HeaderMap,
-    State(db): State<database::AppState>,
+    State(db): State<db::AppState>,
     Query(params): Query<PendingQueryParams>,
 ) -> Response {
     get_pending_uploads(headers, &db, PendingFilter::All, params).await
@@ -436,7 +436,7 @@ pub async fn get_all_pending_uploads(
 
 pub async fn get_pending_uploads_for_user(
     headers: HeaderMap,
-    State(db): State<database::AppState>,
+    State(db): State<db::AppState>,
     Path(id): Path<i64>,
     Query(params): Query<PendingQueryParams>,
 ) -> Response {
@@ -445,7 +445,7 @@ pub async fn get_pending_uploads_for_user(
 
 pub async fn get_pending_info(
     headers: HeaderMap,
-    State(db): State<database::AppState>,
+    State(db): State<db::AppState>,
     Path(id): Path<i64>,
 ) -> Response {
     let _user = match authenticate_moderator(&headers, &db).await {
@@ -478,7 +478,7 @@ pub struct PendingUploadAction {
 
 pub async fn pending_action(
     headers: HeaderMap,
-    State(db): State<database::AppState>,
+    State(db): State<db::AppState>,
     Path(id): Path<i64>,
     Json(action): Json<PendingUploadAction>,
 ) -> Response {
@@ -549,7 +549,7 @@ pub async fn pending_action(
 
 pub async fn get_pending_image(
     headers: HeaderMap,
-    State(db): State<database::AppState>,
+    State(db): State<db::AppState>,
     Path(id): Path<i64>,
 ) -> Response {
     let user = match util::auth_middleware(&headers, &db).await {
@@ -629,7 +629,7 @@ pub async fn get_pending_image(
         ),
     )
 )]
-pub async fn get_level_lock(State(db): State<database::AppState>, Path(id): Path<i64>) -> Response {
+pub async fn get_level_lock(State(db): State<db::AppState>, Path(id): Path<i64>) -> Response {
     match db.get_level_lock(id).await {
         Ok(lock) => util::response(
             StatusCode::OK,
@@ -687,7 +687,7 @@ pub async fn get_level_lock(State(db): State<database::AppState>, Path(id): Path
 )]
 pub async fn lock_level(
     headers: HeaderMap,
-    State(db): State<database::AppState>,
+    State(db): State<db::AppState>,
     Path(id): Path<i64>,
     Json(payload): Json<LockLevelPayload>,
 ) -> Response {
@@ -758,7 +758,7 @@ pub async fn lock_level(
 )]
 pub async fn unlock_level(
     headers: HeaderMap,
-    State(db): State<database::AppState>,
+    State(db): State<db::AppState>,
     Path(id): Path<i64>,
 ) -> Response {
     if let Err(response) = authenticate_admin(&headers, &db).await {
@@ -783,7 +783,7 @@ pub struct AllLevelLocksResponse {
     /// HTTP status code of the response
     pub status: u16,
     /// A list of all currently locked levels, including their lock reason and timestamp
-    pub locks: Vec<database::LevelLock>,
+    pub locks: Vec<db::LevelLock>,
 }
 
 #[utoipa::path(
@@ -836,7 +836,7 @@ pub struct AllLevelLocksResponse {
 )]
 pub async fn get_all_level_locks(
     headers: HeaderMap,
-    State(db): State<database::AppState>,
+    State(db): State<db::AppState>,
 ) -> Response {
     if let Err(response) = authenticate_admin(&headers, &db).await {
         return response;

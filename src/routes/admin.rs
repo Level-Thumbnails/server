@@ -1,4 +1,4 @@
-use crate::{cache_controller, database, util};
+use crate::{cache_controller, db, util};
 use axum::Json;
 use axum::extract::{Path, Query, State};
 use axum::http::{HeaderMap, StatusCode};
@@ -12,8 +12,8 @@ const MAX_ADMIN_USER_PAGE_SIZE: u32 = 100;
 
 pub async fn admin_middleware(
     headers: &HeaderMap,
-    db: &database::AppState,
-) -> Result<database::User, Response> {
+    db: &db::AppState,
+) -> Result<db::User, Response> {
     match util::auth_middleware(headers, db).await {
         Ok(user) => {
             if user.role.can_manage_settings() {
@@ -28,8 +28,8 @@ pub async fn admin_middleware(
 
 pub async fn mod_middleware(
     headers: &HeaderMap,
-    db: &database::AppState,
-) -> Result<database::User, Response> {
+    db: &db::AppState,
+) -> Result<db::User, Response> {
     match util::auth_middleware(headers, db).await {
         Ok(user) => {
             if user.role.can_moderate_pending_uploads() {
@@ -42,7 +42,7 @@ pub async fn mod_middleware(
     }
 }
 
-pub async fn get_settings(headers: HeaderMap, State(db): State<database::AppState>) -> Response {
+pub async fn get_settings(headers: HeaderMap, State(db): State<db::AppState>) -> Response {
     match admin_middleware(&headers, &db).await {
         Ok(_) => util::response(
             StatusCode::OK,
@@ -60,7 +60,7 @@ pub struct UpdateSettingsPayload {
 
 pub async fn update_settings(
     headers: HeaderMap,
-    State(db): State<database::AppState>,
+    State(db): State<db::AppState>,
     Json(payload): Json<UpdateSettingsPayload>,
 ) -> Response {
     match admin_middleware(&headers, &db).await {
@@ -99,17 +99,17 @@ pub struct AdminUsersQueryParams {
     pub username: Option<String>,
     pub account_id: Option<i64>,
     pub discord_id: Option<i64>,
-    pub role: Option<database::Role>,
+    pub role: Option<db::Role>,
     pub total_uploads: Option<i64>,
     pub banned: Option<bool>,
-    pub sort_by: Option<database::UserListSortBy>,
-    pub sort_dir: Option<database::SortDirection>,
+    pub sort_by: Option<db::UserListSortBy>,
+    pub sort_dir: Option<db::SortDirection>,
 }
 
 pub async fn get_users(
     headers: HeaderMap,
     Query(params): Query<AdminUsersQueryParams>,
-    State(db): State<database::AppState>,
+    State(db): State<db::AppState>,
 ) -> Response {
     match mod_middleware(&headers, &db).await {
         Ok(_) => {
@@ -119,7 +119,7 @@ pub async fn get_users(
                 .unwrap_or(DEFAULT_ADMIN_USER_PAGE_SIZE)
                 .clamp(1, MAX_ADMIN_USER_PAGE_SIZE);
 
-            let options = database::AdminUserQueryOptions {
+            let options = db::AdminUserQueryOptions {
                 page,
                 per_page,
                 id: params.id,
@@ -129,8 +129,8 @@ pub async fn get_users(
                 role: params.role,
                 total_uploads: params.total_uploads,
                 banned: params.banned,
-                sort_by: params.sort_by.unwrap_or(database::UserListSortBy::Id),
-                sort_dir: params.sort_dir.unwrap_or(database::SortDirection::Asc),
+                sort_by: params.sort_by.unwrap_or(db::UserListSortBy::Id),
+                sort_dir: params.sort_dir.unwrap_or(db::SortDirection::Asc),
             };
 
             match db.get_admin_users_paginated(options).await {
@@ -168,7 +168,7 @@ pub struct UpdateUserPayload {
     pub username: Option<String>,
     pub account_id: Option<i64>,
     pub discord_id: Option<Option<DiscordIdRaw>>,
-    pub role: Option<database::Role>,
+    pub role: Option<db::Role>,
 }
 
 #[derive(Deserialize, Debug)]
@@ -180,7 +180,7 @@ pub enum DiscordIdRaw {
 
 pub async fn update_user(
     headers: HeaderMap,
-    State(db): State<database::AppState>,
+    State(db): State<db::AppState>,
     Path(id): Path<i64>,
     Json(payload): Json<UpdateUserPayload>,
 ) -> Response {
@@ -208,7 +208,7 @@ pub async fn update_user(
                         },
                     };
 
-                    let options = database::UpdateUserOptions {
+                    let options = db::UpdateUserOptions {
                         username: payload.username,
                         account_id: payload.account_id,
                         discord_id: discord_db,
@@ -217,7 +217,7 @@ pub async fn update_user(
 
                     match db.update_user(id, options).await {
                         Ok(_) => {
-                            let query_opts = database::AdminUserQueryOptions {
+                            let query_opts = db::AdminUserQueryOptions {
                                 page: 1,
                                 per_page: 1,
                                 id: Some(id),
@@ -227,8 +227,8 @@ pub async fn update_user(
                                 role: None,
                                 total_uploads: None,
                                 banned: None,
-                                sort_by: database::UserListSortBy::Id,
-                                sort_dir: database::SortDirection::Asc,
+                                sort_by: db::UserListSortBy::Id,
+                                sort_dir: db::SortDirection::Asc,
                             };
 
                             match db.get_admin_users_paginated(query_opts).await {
@@ -262,7 +262,7 @@ pub async fn update_user(
 
 pub async fn delete_thumbnail(
     headers: HeaderMap,
-    State(db): State<database::AppState>,
+    State(db): State<db::AppState>,
     Path(id): Path<i64>,
 ) -> Response {
     match mod_middleware(&headers, &db).await {
@@ -296,7 +296,7 @@ pub struct BanUserPayload {
 
 pub async fn ban_user(
     headers: HeaderMap,
-    State(db): State<database::AppState>,
+    State(db): State<db::AppState>,
     Path(id): Path<i64>,
     Json(payload): Json<BanUserPayload>,
 ) -> Response {
@@ -329,7 +329,7 @@ pub async fn ban_user(
 
 pub async fn unban_user(
     headers: HeaderMap,
-    State(db): State<database::AppState>,
+    State(db): State<db::AppState>,
     Path(id): Path<i64>,
 ) -> Response {
     match mod_middleware(&headers, &db).await {

@@ -1,619 +1,15 @@
-use sqlx::postgres::PgPoolOptions;
-use sqlx::{FromRow, Postgres, QueryBuilder};
 use std::collections::{HashMap, HashSet};
 use std::path::Path;
-
-use crate::util::{ModUserAgent, ParsedSubmissionNote, VersionInfo};
-use chrono::{Datelike, NaiveDate, NaiveDateTime, Utc};
-use serde::{Deserialize, Serialize};
 use std::sync::Arc;
-use sqlx::types::Json;
+use chrono::{Datelike, NaiveDate, NaiveDateTime, Utc};
+use sqlx::{FromRow, Postgres, QueryBuilder};
+use sqlx::postgres::PgPoolOptions;
 use tokio::sync::RwLock;
 use tracing::{error, warn};
+use crate::db::{ActiveUpload, ActiveUploadsPage, AdminUserQueryOptions, AdminUserRow, AdminUsersPage, AppState, BadgeLists, LevelLock, MyUploadsSummary, NoteData, PendingQueryOptions, PendingUpload, PendingUploadsPage, RejectedUpload, RejectedUploadsPage, Settings, StatsSnapshot, UpdateUserOptions, UploadExtended, UploadInfo, User, UserBan, UserHistoryPoint, UserStats, MAX_MY_UPLOADS_PAGE_SIZE, PENDING_UPLOAD_SELECT, USER_STATS_CTE};
+use crate::db::filters::{apply_pending_filters, apply_user_filters, apply_user_sort};
 use crate::util;
-
-const PENDING_UPLOAD_SELECT: &str = "SELECT uploads.id, user_id, users.username AS username, level_id, accepted, upload_time, users.account_id AS account_id, users.role AS user_role, \
-     row_to_json(notes) AS note_data
-     FROM uploads \
-     LEFT JOIN users ON users.id = user_id \
-     LEFT JOIN notes ON notes.upload_id = uploads.id \
-     WHERE accepted = FALSE AND accepted_time IS NULL";
-
-const MAX_MY_UPLOADS_PAGE_SIZE: u32 = 100;
-
-const USER_STATS_CTE: &str = r#"WITH upload_counts AS (
-    SELECT
-        user_id,
-        COUNT(*)::BIGINT AS total_uploads,
-        COUNT(*) FILTER (WHERE accepted = TRUE)::BIGINT AS accepted,
-        COUNT(*) FILTER (WHERE accepted = FALSE AND accepted_time IS NULL)::BIGINT AS pending,
-        COUNT(*) FILTER (WHERE accepted = FALSE AND accepted_time IS NOT NULL)::BIGINT AS rejected
-    FROM uploads
-    GROUP BY user_id
-), latest_accepted_uploads AS (
-    SELECT DISTINCT ON (level_id)
-        level_id,
-        user_id
-    FROM uploads
-    WHERE accepted = TRUE AND deleted_at IS NULL
-    ORDER BY level_id, upload_time DESC, id DESC
-), active_counts AS (
-    SELECT
-        user_id,
-        COUNT(*)::BIGINT AS active_thumbnails
-    FROM latest_accepted_uploads
-    GROUP BY user_id
-), active_bans AS (
-    SELECT DISTINCT ON (bans.user_id)
-        bans.user_id,
-        bans.ban_time,
-        bans.reason,
-        bans.expires_at,
-        banned_by.username AS banned_by_username
-    FROM bans
-    JOIN users AS banned_by ON banned_by.id = bans.banned_by
-    WHERE bans.expires_at IS NULL OR bans.expires_at > NOW()
-    ORDER BY bans.user_id, bans.ban_time DESC, bans.id DESC
-), user_stats AS (
-    SELECT
-        users.id,
-        users.username,
-        users.account_id,
-        users.discord_id,
-        users.role,
-        COALESCE(upload_counts.total_uploads, 0) AS total_uploads,
-        COALESCE(upload_counts.accepted, 0) AS accepted,
-        COALESCE(upload_counts.pending, 0) AS pending,
-        COALESCE(upload_counts.rejected, 0) AS rejected,
-        COALESCE(active_counts.active_thumbnails, 0) AS active_thumbnails,
-        active_bans.ban_time AS ban_time,
-        active_bans.reason AS ban_reason,
-        active_bans.expires_at AS ban_expires_at,
-        active_bans.banned_by_username AS banned_by_username,
-        active_bans.user_id IS NOT NULL AS banned
-    FROM users
-    LEFT JOIN upload_counts ON upload_counts.user_id = users.id
-    LEFT JOIN active_counts ON active_counts.user_id = users.id
-    LEFT JOIN active_bans ON active_bans.user_id = users.id
-)"#;
-
-fn serialize_discord_snowflake<S>(value: &Option<i64>, serializer: S) -> Result<S::Ok, S::Error>
-where
-    S: serde::Serializer,
-{
-    match value {
-        Some(id) => serializer.serialize_some(&id.to_string()),
-        None => serializer.serialize_none(),
-    }
-}
-
-fn default_min_supported_client() -> VersionInfo {
-    VersionInfo::from_str("v2.1.0").expect("Invalid default version")
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
-#[serde(default)]
-pub struct Settings {
-    pub pause_submissions: bool,
-    #[serde(default = "default_min_supported_client")]
-    pub min_supported_client: VersionInfo,
-}
-
-impl Default for Settings {
-    fn default() -> Self {
-        Self {
-            pause_submissions: false,
-            min_supported_client: default_min_supported_client(),
-        }
-    }
-}
-
-#[derive(Debug, Clone)]
-pub struct AppState {
-    pub pool: Arc<sqlx::Pool<Postgres>>,
-    pub settings: Arc<RwLock<Settings>>,
-    pub online_moderators: Arc<RwLock<HashMap<i64, (String, chrono::DateTime<Utc>)>>>,
-    pub registered_users: Arc<RwLock<HashSet<i64>>>
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
-pub enum Permission {
-    DirectUploadNewThumbnail,
-    DirectUploadReplacement,
-    ModeratePendingUploads,
-    ManageUserProfiles,
-    ViewOtherUserHistory,
-    ManageLevelLocks,
-    ManageSettings,
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize, Serialize, sqlx::Type)]
-#[serde(rename_all = "lowercase")]
-#[sqlx(type_name = "TEXT", rename_all = "lowercase")]
-pub enum Role {
-    User,      // regular user
-    Verified,  // verified users can upload thumbnails without approval
-    Moderator, // moderators can approve or reject uploads
-    Admin,     // admins can manage users and uploads
-    Owner,     // superadmin with unrestricted access
-}
-
-impl std::fmt::Display for Role {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        match self {
-            Role::User => write!(f, "user"),
-            Role::Verified => write!(f, "verified"),
-            Role::Moderator => write!(f, "moderator"),
-            Role::Admin => write!(f, "admin"),
-            Role::Owner => write!(f, "owner"),
-        }
-    }
-}
-
-impl Role {
-    pub const ORDERED: [Role; 5] =
-        [Role::User, Role::Verified, Role::Moderator, Role::Admin, Role::Owner];
-
-    pub fn rank(self) -> u8 {
-        match self {
-            Role::User => 0,
-            Role::Verified => 1,
-            Role::Moderator => 2,
-            Role::Admin => 3,
-            Role::Owner => 4,
-        }
-    }
-
-    pub fn has_permission(self, permission: Permission) -> bool {
-        match permission {
-            Permission::DirectUploadNewThumbnail => {
-                matches!(self, Role::Verified | Role::Moderator | Role::Admin | Role::Owner)
-            }
-            Permission::DirectUploadReplacement => {
-                matches!(self, Role::Moderator | Role::Admin | Role::Owner)
-            }
-            Permission::ModeratePendingUploads => {
-                matches!(self, Role::Moderator | Role::Admin | Role::Owner)
-            }
-            Permission::ManageUserProfiles => {
-                matches!(self, Role::Moderator | Role::Admin | Role::Owner)
-            }
-            Permission::ViewOtherUserHistory => {
-                matches!(self, Role::Moderator | Role::Admin | Role::Owner)
-            }
-            Permission::ManageLevelLocks => matches!(self, Role::Admin | Role::Owner),
-            Permission::ManageSettings => matches!(self, Role::Admin | Role::Owner),
-        }
-    }
-
-    pub fn can_manage_user(self, target: Role) -> bool {
-        self == Role::Owner
-            || (self.has_permission(Permission::ManageUserProfiles) && self.rank() > target.rank())
-    }
-
-    pub fn can_assign_role(self, target: Role) -> bool {
-        self == Role::Owner
-            || (self.has_permission(Permission::ManageUserProfiles) && self.rank() > target.rank())
-    }
-
-    pub fn can_bypass_level_locks(self) -> bool {
-        self.has_permission(Permission::ManageLevelLocks)
-    }
-
-    pub fn can_manage_level_locks(self) -> bool {
-        self.has_permission(Permission::ManageLevelLocks)
-    }
-
-    pub fn can_moderate_pending_uploads(self) -> bool {
-        self.has_permission(Permission::ModeratePendingUploads)
-    }
-
-    pub fn can_view_other_user_history(self) -> bool {
-        self.has_permission(Permission::ViewOtherUserHistory)
-    }
-
-    pub fn can_manage_settings(self) -> bool {
-        self.has_permission(Permission::ManageSettings)
-    }
-
-    pub fn can_upload_new_thumbnail_directly(self) -> bool {
-        self.has_permission(Permission::DirectUploadNewThumbnail)
-    }
-
-    pub fn can_upload_replacement_directly(self) -> bool {
-        self.has_permission(Permission::DirectUploadReplacement)
-    }
-}
-
-#[derive(Debug, FromRow, Serialize)]
-pub struct User {
-    pub id: i64,
-    pub account_id: i64,
-    pub username: String,
-    pub role: Role,
-    #[serde(serialize_with = "serialize_discord_snowflake")]
-    pub discord_id: Option<i64>,
-}
-
-#[derive(FromRow)]
-pub struct UploadInfo {
-    pub account_id: i64,
-    pub username: String,
-}
-
-/// Detailed information about a thumbnail upload
-#[derive(FromRow, Serialize, Deserialize, utoipa::ToSchema)]
-pub struct UploadExtended {
-    /// ID of the level associated with this upload
-    pub level_id: i64,
-    /// Geometry Dash account ID of the user who made the upload
-    pub account_id: i64,
-    /// Username of the user who made the upload
-    pub username: String,
-    /// Timestamp when the upload was made
-    #[schema(value_type = String, format = DateTime)]
-    pub upload_time: NaiveDateTime,
-    /// Timestamp of the first accepted upload for this level (may be the same as upload_time if this is the first accepted upload)
-    #[schema(value_type = String, format = DateTime)]
-    pub first_upload_time: NaiveDateTime,
-    /// Timestamp when this upload was accepted
-    #[schema(value_type = String, format = DateTime)]
-    pub accepted_time: Option<NaiveDateTime>,
-    /// Geometry Dash account ID of the admin who accepted this upload, if applicable
-    pub accepted_by: Option<i64>,
-    /// Username of the admin who accepted this upload, if applicable
-    pub accepted_by_username: Option<String>,
-}
-
-#[derive(
-    Debug,
-    Clone,
-    Copy,
-    Serialize,
-    Deserialize,
-    sqlx::Type,
-    utoipa::ToSchema
-)]
-#[sqlx(type_name = "length_enum")]
-pub enum Length {
-    Tiny,
-    Short,
-    Medium,
-    Long,
-    XL,
-    Plat,
-}
-
-#[derive(
-    Debug,
-    Clone,
-    Copy,
-    Serialize,
-    Deserialize,
-    sqlx::Type,
-    utoipa::ToSchema
-)]
-#[sqlx(type_name = "rating_enum")]
-pub enum Rating {
-    NA,
-    Rated,
-    Featured,
-    Epic,
-    Legendary,
-    Mythic
-}
-
-#[derive(
-    Debug,
-    Clone,
-    Copy,
-    Serialize,
-    Deserialize,
-    sqlx::Type,
-    utoipa::ToSchema
-)]
-#[sqlx(type_name = "difficulty_enum")]
-pub enum Difficulty {
-    NA,
-    Auto,
-    Easy,
-    Normal,
-    Hard,
-    Harder,
-    Insane,
-    EasyDemon,
-    MediumDemon,
-    HardDemon,
-    InsaneDemon,
-    ExtremeDemon
-}
-
-#[derive(Debug, Clone, FromRow, Serialize, Deserialize, utoipa::ToSchema)]
-pub struct NoteData {
-    pub level_name: String,
-    pub creator_id: i64,
-    pub creator_name: String,
-    pub downloads: i64,
-    pub likes: i64,
-    pub stars: i64,
-    pub length: Length,
-    pub rating: Rating,
-    pub difficulty: Difficulty,
-    pub percentage: f32,
-    pub attempt_time: f64,
-    pub message: Option<String>,
-    pub mod_version: String,
-    pub mod_platform: String,
-}
-
-impl NoteData {
-    pub fn from_parsed(note: ParsedSubmissionNote, ua: ModUserAgent) -> Self {
-        Self {
-            level_name: note.level_name,
-            creator_id: note.creator_id,
-            creator_name: note.creator_name,
-            downloads: note.downloads,
-            likes: note.likes,
-            stars: note.stars,
-            length: match note.length {
-                0 => Length::Tiny,
-                1 => Length::Short,
-                2 => Length::Medium,
-                3 => Length::Long,
-                4 => Length::XL,
-                5 => Length::Plat,
-                _ => Length::Tiny
-            },
-            rating: match note.rating {
-                0 => Rating::NA,
-                1 => Rating::Rated,
-                2 => Rating::Featured,
-                3 => Rating::Epic,
-                4 => Rating::Legendary,
-                5 => Rating::Mythic,
-                _ => Rating::NA
-            },
-            difficulty: match note.difficulty {
-                0 => Difficulty::NA,
-                1 => Difficulty::Auto,
-                2 => Difficulty::Easy,
-                3 => Difficulty::Normal,
-                4 => Difficulty::Hard,
-                5 => Difficulty::Harder,
-                6 => Difficulty::Insane,
-                7 => Difficulty::EasyDemon,
-                8 => Difficulty::MediumDemon,
-                9 => Difficulty::HardDemon,
-                10 => Difficulty::InsaneDemon,
-                11 => Difficulty::ExtremeDemon,
-                _ => Difficulty::NA
-            },
-            percentage: note.percentage,
-            attempt_time: note.attempt_time,
-            message: note.message,
-            mod_version: ua.version.to_string(),
-            mod_platform: ua.platform.to_string(),
-        }
-    }
-}
-
-/// Represents a lock on a specific level, preventing new thumbnail uploads for that level until the lock is removed.
-#[derive(Debug, Clone, FromRow, Serialize, Deserialize, utoipa::ToSchema)]
-pub struct LevelLock {
-    /// ID of the level that is locked
-    pub level_id: i64,
-    /// ID of the admin who locked the level
-    pub locked_by: i64,
-    /// Username of the admin who locked the level
-    pub locked_by_username: String,
-    /// Timestamp when the level was locked
-    #[schema(value_type = String, format = DateTime)]
-    pub locked_at: NaiveDateTime,
-    /// Optional reason provided by the admin for locking the level
-    pub reason: Option<String>,
-}
-
-#[derive(Debug, Clone, FromRow, Serialize, Deserialize)]
-pub struct PendingUpload {
-    pub id: i64,
-    pub user_id: i64,
-    pub username: String,
-    pub level_id: i64,
-    pub accepted: bool,
-    pub upload_time: NaiveDateTime,
-
-    pub note_data: Option<Json<NoteData>>,
-    pub account_id: Option<i64>,
-    pub user_role: Role,
-
-    #[sqlx(skip)]
-    pub replacement: bool,
-}
-
-#[derive(Debug, Clone, FromRow, Serialize, Deserialize)]
-pub struct ActiveUpload {
-    pub id: i64,
-    pub level_id: i64,
-    pub upload_time: NaiveDateTime,
-    pub accepted_time: Option<NaiveDateTime>,
-    pub note_data: Option<Json<NoteData>>,
-}
-
-#[derive(Debug, Clone, FromRow, Serialize, Deserialize)]
-pub struct RejectedUpload {
-    pub id: i64,
-    pub level_id: i64,
-    pub upload_time: NaiveDateTime,
-    pub accepted_time: Option<NaiveDateTime>,
-    pub note_data: Option<Json<NoteData>>,
-    pub reason: Option<String>,
-    pub accepted_by_username: Option<String>,
-}
-
-#[derive(Debug, Clone)]
-pub struct PendingQueryOptions {
-    pub page: u32,
-    pub per_page: u32,
-    pub level_id: Option<i64>,
-    pub user_id: Option<i64>,
-    pub username: Option<String>,
-    pub replacement_only: bool,
-    pub new_only: bool,
-}
-
-#[derive(Debug, Clone)]
-pub struct PendingUploadsPage {
-    pub uploads: Vec<PendingUpload>,
-    pub total: i64,
-}
-
-#[derive(Debug, Clone)]
-pub struct ActiveUploadsPage {
-    pub uploads: Vec<ActiveUpload>,
-    pub total: i64,
-}
-
-#[derive(Debug, Clone)]
-pub struct RejectedUploadsPage {
-    pub uploads: Vec<RejectedUpload>,
-    pub total: i64,
-}
-
-#[derive(Debug, Clone, Serialize)]
-pub struct MyUploadsSummary {
-    pub active: i64,
-    pub pending: i64,
-    pub rejected: i64,
-}
-
-#[derive(FromRow, Serialize, Deserialize)]
-pub struct UserStats {
-    pub id: i64,
-    pub account_id: i64,
-    pub username: String,
-    pub role: Role,
-    pub upload_count: i64,
-    pub accepted_upload_count: i64,
-    pub pending_upload_count: i64,
-    pub level_count: i64,
-    pub accepted_level_count: i64,
-    pub active_thumbnail_count: i64,
-}
-
-#[derive(FromRow, Serialize, Deserialize)]
-pub struct UserBan {
-    pub id: i64,
-    pub user_id: i64,
-    pub ban_time: NaiveDateTime,
-    pub reason: String,
-    pub expires_at: Option<NaiveDateTime>,
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize, Serialize)]
-#[serde(rename_all = "snake_case")]
-pub enum UserListSortBy {
-    Id,
-    Username,
-    AccountId,
-    DiscordId,
-    Role,
-    TotalUploads,
-    Accepted,
-    Pending,
-    Rejected,
-    ActiveThumbnails,
-    Banned,
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize, Serialize)]
-#[serde(rename_all = "snake_case")]
-pub enum SortDirection {
-    Asc,
-    Desc,
-}
-
-#[derive(Debug, Clone)]
-pub struct AdminUserQueryOptions {
-    pub page: u32,
-    pub per_page: u32,
-    pub id: Option<i64>,
-    pub username: Option<String>,
-    pub account_id: Option<i64>,
-    pub discord_id: Option<i64>,
-    pub role: Option<Role>,
-    pub total_uploads: Option<i64>,
-    pub banned: Option<bool>,
-    pub sort_by: UserListSortBy,
-    pub sort_dir: SortDirection,
-}
-
-#[derive(Debug, Clone, FromRow, Serialize)]
-pub struct AdminUserRow {
-    pub id: i64,
-    pub username: String,
-    pub account_id: i64,
-    #[serde(serialize_with = "serialize_discord_snowflake")]
-    pub discord_id: Option<i64>,
-    pub role: Role,
-    pub total_uploads: i64,
-    pub accepted: i64,
-    pub pending: i64,
-    pub rejected: i64,
-    pub active_thumbnails: i64,
-    pub banned: bool,
-    pub ban_time: Option<NaiveDateTime>,
-    pub ban_reason: Option<String>,
-    pub ban_expires_at: Option<NaiveDateTime>,
-    pub banned_by_username: Option<String>,
-}
-
-#[derive(Debug, Clone)]
-pub struct AdminUsersPage {
-    pub users: Vec<AdminUserRow>,
-    pub total: i64,
-}
-
-/// Represents a snapshot of various statistics about the thumbnail repository at a specific point in time.
-#[derive(Debug, Clone, FromRow, Serialize, Deserialize, utoipa::ToSchema)]
-pub struct StatsSnapshot {
-    /// Unique identifier for this snapshot
-    pub id: i64,
-    /// Timestamp when the snapshot was taken
-    #[schema(value_type = String, format = DateTime)]
-    pub captured_at: NaiveDateTime,
-    /// Total storage used by all thumbnails in bytes
-    pub storage_bytes: i64,
-    /// Total number of unique thumbnails stored on the server
-    pub thumbnails_count: i64,
-    /// Number of unique users (IPs) that have accessed any endpoint on the server in the past 30 days. (Uses Cloudflare data, may not be perfectly accurate)
-    pub users_per_month: Option<i64>,
-    /// Total number of registered users
-    pub users_total: i64,
-    /// Total number of uploads (including accepted, rejected, and pending) that the server has processed
-    pub uploads_total: i64,
-    /// Number of uploads in pending review
-    pub pending_uploads_total: i64,
-    /// Total number of accepted uploads (including ones that got replaced later)
-    pub accepted_uploads_total: i64,
-}
-
-#[derive(Debug, Clone, FromRow, Serialize, Deserialize)]
-pub struct UserHistoryPoint {
-    pub period: NaiveDate,
-    pub upload_count: i64,
-    pub accepted_upload_count: i64,
-    pub pending_upload_count: i64,
-    pub level_count: i64,
-    pub accepted_level_count: i64,
-}
-
-#[derive(Debug, Clone, FromRow, Serialize, Deserialize)]
-pub struct BadgeLists {
-    pub verified: Vec<i64>,
-    pub moderator: Vec<i64>,
-    pub admin: Vec<i64>,
-    pub owner: Vec<i64>,
-}
+use crate::util::ModUserAgent;
 
 fn month_start(date: NaiveDate) -> NaiveDate {
     NaiveDate::from_ymd_opt(date.year(), date.month(), 1).expect("invalid month start")
@@ -629,14 +25,6 @@ fn add_months(date: NaiveDate, months: i32) -> NaiveDate {
 
 fn is_image_uploaded(level_id: i64) -> bool {
     Path::new(&format!("thumbnails/{}.webp", level_id)).exists()
-}
-
-#[derive(Debug, Clone)]
-pub struct UpdateUserOptions {
-    pub username: Option<String>,
-    pub account_id: Option<i64>,
-    pub discord_id: Option<Option<i64>>,
-    pub role: Option<Role>,
 }
 
 async fn migrate_submission_notes_perform(pool: &sqlx::Pool<Postgres>) -> Result<(), sqlx::Error> {
@@ -693,18 +81,18 @@ async fn migrate_submission_notes_perform(pool: &sqlx::Pool<Postgres>) -> Result
 }
 
 async fn migrate_submission_notes(pool: &sqlx::Pool<Postgres>) {
-    let row = sqlx::query!(
+    let row = sqlx::query_scalar::<_, bool>(
         "SELECT EXISTS (
             SELECT 1
             FROM information_schema.columns
             WHERE table_name='uploads' AND column_name='submission_note'
         )",
     )
-    .fetch_one(pool)
-    .await
-    .expect("Failed to check for submission_note column");
+        .fetch_one(pool)
+        .await
+        .expect("Failed to check for submission_note column");
 
-    if row.exists.unwrap_or(false) {
+    if row {
         warn!("Migrating old 'submission_note' column");
 
         if let Err(e) = migrate_submission_notes_perform(pool).await {
@@ -742,10 +130,13 @@ impl AppState {
             Settings::default()
         };
 
-        // pre-load registered users
+        // preload registered users
         let mut set: HashSet<i64>;
         {
-            let rows = sqlx::query!("SELECT account_id FROM users WHERE account_id != -1")
+            #[derive(Debug, FromRow)]
+            struct Row { account_id: i64 }
+
+            let rows: Vec<Row> = sqlx::query_as("SELECT account_id FROM users WHERE account_id != -1")
                 .fetch_all(&pool)
                 .await
                 .expect("Failed to fetch registered users");
@@ -791,10 +182,10 @@ impl AppState {
              WHERE uploads.level_id = $1 AND accepted = TRUE AND uploads.deleted_at IS NULL
              ORDER BY upload_time DESC LIMIT 1",
         )
-        .bind(id)
-        .fetch_optional(&*self.pool)
-        .await
-        .ok()?
+            .bind(id)
+            .fetch_optional(&*self.pool)
+            .await
+            .ok()?
     }
 
     pub async fn get_upload_extended(&self, id: i64) -> Option<UploadExtended> {
@@ -867,9 +258,9 @@ impl AppState {
         let legacy_user = sqlx::query_as::<_, User>(
             "SELECT * FROM users WHERE account_id = -1 AND username = $1 AND discord_id IS NULL",
         )
-        .bind(username)
-        .fetch_optional(&*self.pool)
-        .await?;
+            .bind(username)
+            .fetch_optional(&*self.pool)
+            .await?;
 
         if let Some(legacy_user) = legacy_user {
             // update the legacy user with the discord_id
@@ -1014,23 +405,23 @@ impl AppState {
                 mod_version = EXCLUDED.mod_version,
                 mod_platform = EXCLUDED.mod_platform",
         )
-        .bind(upload_id)
-        .bind(submission_note.level_name)
-        .bind(submission_note.creator_id)
-        .bind(submission_note.creator_name)
-        .bind(submission_note.downloads)
-        .bind(submission_note.likes)
-        .bind(submission_note.stars)
-        .bind(submission_note.length)
-        .bind(submission_note.rating)
-        .bind(submission_note.difficulty)
-        .bind(submission_note.percentage)
-        .bind(submission_note.attempt_time)
-        .bind(submission_note.message)
-        .bind(submission_note.mod_version)
-        .bind(submission_note.mod_platform)
-        .execute(&*self.pool)
-        .await?;
+            .bind(upload_id)
+            .bind(submission_note.level_name)
+            .bind(submission_note.creator_id)
+            .bind(submission_note.creator_name)
+            .bind(submission_note.downloads)
+            .bind(submission_note.likes)
+            .bind(submission_note.stars)
+            .bind(submission_note.length)
+            .bind(submission_note.rating)
+            .bind(submission_note.difficulty)
+            .bind(submission_note.percentage)
+            .bind(submission_note.attempt_time)
+            .bind(submission_note.message)
+            .bind(submission_note.mod_version)
+            .bind(submission_note.mod_platform)
+            .execute(&*self.pool)
+            .await?;
 
         Ok(())
     }
@@ -1047,9 +438,9 @@ impl AppState {
              JOIN users ON users.id = level_locks.locked_by
              WHERE level_locks.level_id = $1",
         )
-        .bind(level_id)
-        .fetch_optional(&*self.pool)
-        .await
+            .bind(level_id)
+            .fetch_optional(&*self.pool)
+            .await
     }
 
     pub async fn get_all_level_locks(&self) -> Result<Vec<LevelLock>, sqlx::Error> {
@@ -1064,8 +455,8 @@ impl AppState {
              JOIN users ON users.id = level_locks.locked_by
              ORDER BY level_locks.locked_at DESC, level_locks.level_id DESC",
         )
-        .fetch_all(&*self.pool)
-        .await
+            .fetch_all(&*self.pool)
+            .await
     }
 
     pub async fn lock_level(
@@ -1083,11 +474,11 @@ impl AppState {
                  reason = EXCLUDED.reason,
                  locked_at = NOW()",
         )
-        .bind(level_id)
-        .bind(locked_by)
-        .bind(reason)
-        .execute(&*self.pool)
-        .await?;
+            .bind(level_id)
+            .bind(locked_by)
+            .bind(reason)
+            .execute(&*self.pool)
+            .await?;
 
         Ok(())
     }
@@ -1106,109 +497,11 @@ impl AppState {
             "UPDATE uploads SET deleted_at = NOW()
              WHERE level_id = $1 AND accepted = TRUE AND deleted_at IS NULL",
         )
-        .bind(level_id)
-        .execute(&*self.pool)
-        .await?;
+            .bind(level_id)
+            .execute(&*self.pool)
+            .await?;
 
         Ok(result.rows_affected() > 0)
-    }
-
-    fn apply_pending_filters<'a>(
-        builder: &mut QueryBuilder<'a, Postgres>,
-        options: &PendingQueryOptions,
-    ) {
-        if let Some(level_id) = options.level_id {
-            builder.push(" AND uploads.level_id = ").push_bind(level_id);
-        }
-
-        if let Some(user_id) = options.user_id {
-            builder.push(" AND uploads.user_id = ").push_bind(user_id);
-        }
-
-        if let Some(ref username) = options.username {
-            builder
-                .push(" AND LOWER(username) LIKE LOWER(")
-                .push_bind(format!("%{}%", username))
-                .push(")");
-        }
-    }
-
-    fn apply_user_filters<'a>(
-        builder: &mut QueryBuilder<'a, Postgres>,
-        options: &AdminUserQueryOptions,
-    ) {
-        if let Some(id) = options.id {
-            builder.push(" AND id = ").push_bind(id);
-        }
-
-        if let Some(ref username) = options.username {
-            let username = username.trim();
-            if !username.is_empty() {
-                builder
-                    .push(" AND LOWER(username) LIKE LOWER(")
-                    .push_bind(format!("%{}%", username))
-                    .push(")");
-            }
-        }
-
-        if let Some(account_id) = options.account_id {
-            builder.push(" AND account_id = ").push_bind(account_id);
-        }
-
-        if let Some(discord_id) = options.discord_id {
-            builder.push(" AND discord_id = ").push_bind(discord_id);
-        }
-
-        if let Some(role) = options.role {
-            builder.push(" AND role = ").push_bind(role);
-        }
-
-        if let Some(total_uploads) = options.total_uploads {
-            builder.push(" AND total_uploads = ").push_bind(total_uploads);
-        }
-
-        if let Some(banned) = options.banned {
-            builder.push(" AND banned = ").push_bind(banned);
-        }
-    }
-
-    fn apply_user_sort(
-        builder: &mut QueryBuilder<'_, Postgres>,
-        sort_by: UserListSortBy,
-        sort_direction: SortDirection,
-    ) {
-        let direction = match sort_direction {
-            SortDirection::Asc => "ASC",
-            SortDirection::Desc => "DESC",
-        };
-
-        builder.push(" ORDER BY ");
-        match sort_by {
-            UserListSortBy::Id => builder.push("id ").push(direction),
-            UserListSortBy::Username => builder.push("LOWER(username) ").push(direction),
-            UserListSortBy::AccountId => builder.push("account_id ").push(direction),
-            UserListSortBy::DiscordId => {
-                builder.push("discord_id ").push(direction).push(" NULLS LAST")
-            }
-            UserListSortBy::Role => {
-                builder.push("CASE role ");
-                for (rank, role) in Role::ORDERED.iter().copied().enumerate() {
-                    builder
-                        .push("WHEN ")
-                        .push_bind(role)
-                        .push(" THEN ")
-                        .push_bind(rank as i32)
-                        .push(" ");
-                }
-                builder.push("END ").push(direction)
-            }
-            UserListSortBy::TotalUploads => builder.push("total_uploads ").push(direction),
-            UserListSortBy::Accepted => builder.push("accepted ").push(direction),
-            UserListSortBy::Pending => builder.push("pending ").push(direction),
-            UserListSortBy::Rejected => builder.push("rejected ").push(direction),
-            UserListSortBy::ActiveThumbnails => builder.push("active_thumbnails ").push(direction),
-            UserListSortBy::Banned => builder.push("banned ").push(direction),
-        };
     }
 
     pub async fn get_pending_uploads_paginated(
@@ -1217,7 +510,7 @@ impl AppState {
     ) -> Result<PendingUploadsPage, sqlx::Error> {
         if options.replacement_only || options.new_only {
             let mut builder = QueryBuilder::new(PENDING_UPLOAD_SELECT);
-            Self::apply_pending_filters(&mut builder, &options);
+            apply_pending_filters(&mut builder, &options);
             builder.push(" ORDER BY upload_time ASC, uploads.id ASC");
 
             let mut all_uploads =
@@ -1239,7 +532,7 @@ impl AppState {
             let offset = options.page.saturating_sub(1) as i64 * per_page;
 
             let mut data_builder = QueryBuilder::new(PENDING_UPLOAD_SELECT);
-            Self::apply_pending_filters(&mut data_builder, &options);
+            apply_pending_filters(&mut data_builder, &options);
             data_builder
                 .push(" ORDER BY upload_time ASC, uploads.id ASC LIMIT ")
                 .push_bind(per_page)
@@ -1254,7 +547,7 @@ impl AppState {
                  LEFT JOIN users ON users.id = user_id
                  WHERE accepted = FALSE AND accepted_time IS NULL",
             );
-            Self::apply_pending_filters(&mut count_builder, &options);
+            apply_pending_filters(&mut count_builder, &options);
             let total: i64 = count_builder.build_query_scalar().fetch_one(&*self.pool).await?;
 
             Ok(PendingUploadsPage { uploads, total })
@@ -1269,9 +562,9 @@ impl AppState {
             "{} AND user_id = $1 ORDER BY upload_time",
             PENDING_UPLOAD_SELECT
         ))
-        .bind(user_id)
-        .fetch_all(&*self.pool)
-        .await
+            .bind(user_id)
+            .fetch_all(&*self.pool)
+            .await
     }
 
     pub async fn get_user_active_uploads_paginated(
@@ -1307,12 +600,12 @@ impl AppState {
             ORDER BY upload_time DESC, id DESC
             LIMIT $2 OFFSET $3",
         )
-        .bind(user_id)
-        .bind(per_page)
-        .bind(offset)
-        .bind(level_id_search)
-        .fetch_all(&*self.pool)
-        .await?;
+            .bind(user_id)
+            .bind(per_page)
+            .bind(offset)
+            .bind(level_id_search)
+            .fetch_all(&*self.pool)
+            .await?;
 
         let total: i64 = sqlx::query_scalar(
             "WITH active_uploads AS (
@@ -1325,10 +618,10 @@ impl AppState {
             )
             SELECT COUNT(*) FROM active_uploads WHERE user_id = $1 AND ($2::BIGINT IS NULL OR level_id = $2)",
         )
-        .bind(user_id)
-        .bind(level_id_search)
-        .fetch_one(&*self.pool)
-        .await?;
+            .bind(user_id)
+            .bind(level_id_search)
+            .fetch_one(&*self.pool)
+            .await?;
 
         Ok(ActiveUploadsPage { uploads, total })
     }
@@ -1366,12 +659,12 @@ impl AppState {
             ORDER BY uploads.accepted_time DESC, uploads.id DESC
             LIMIT $2 OFFSET $3",
         )
-        .bind(user_id)
-        .bind(per_page)
-        .bind(offset)
-        .bind(level_id_search)
-        .fetch_all(&*self.pool)
-        .await?;
+            .bind(user_id)
+            .bind(per_page)
+            .bind(offset)
+            .bind(level_id_search)
+            .fetch_all(&*self.pool)
+            .await?;
 
         let total: i64 = sqlx::query_scalar(
             "SELECT COUNT(*)
@@ -1382,10 +675,10 @@ impl AppState {
                AND uploads.deleted_at IS NULL
                AND ($2::BIGINT IS NULL OR uploads.level_id = $2)",
         )
-        .bind(user_id)
-        .bind(level_id_search)
-        .fetch_one(&*self.pool)
-        .await?;
+            .bind(user_id)
+            .bind(level_id_search)
+            .fetch_one(&*self.pool)
+            .await?;
 
         Ok(RejectedUploadsPage { uploads, total })
     }
@@ -1409,10 +702,10 @@ impl AppState {
                 )
                 SELECT COUNT(*) FROM active_uploads WHERE user_id = $1 AND level_id = $2",
             )
-            .bind(user_id)
-            .bind(level_id)
-            .fetch_one(&*self.pool)
-            .await?
+                .bind(user_id)
+                .bind(level_id)
+                .fetch_one(&*self.pool)
+                .await?
         } else {
             sqlx::query_scalar(
                 "WITH active_uploads AS (
@@ -1424,9 +717,9 @@ impl AppState {
                 )
                 SELECT COUNT(*) FROM active_uploads WHERE user_id = $1",
             )
-            .bind(user_id)
-            .fetch_one(&*self.pool)
-            .await?
+                .bind(user_id)
+                .fetch_one(&*self.pool)
+                .await?
         };
 
         let pending = if let Some(level_id) = level_id_search {
@@ -1439,10 +732,10 @@ impl AppState {
                    AND uploads.deleted_at IS NULL
                    AND uploads.level_id = $2",
             )
-            .bind(user_id)
-            .bind(level_id)
-            .fetch_one(&*self.pool)
-            .await?
+                .bind(user_id)
+                .bind(level_id)
+                .fetch_one(&*self.pool)
+                .await?
         } else {
             sqlx::query_scalar(
                 "SELECT COUNT(*)
@@ -1452,9 +745,9 @@ impl AppState {
                    AND uploads.accepted_time IS NULL
                    AND uploads.deleted_at IS NULL",
             )
-            .bind(user_id)
-            .fetch_one(&*self.pool)
-            .await?
+                .bind(user_id)
+                .fetch_one(&*self.pool)
+                .await?
         };
 
         let rejected = if let Some(level_id) = level_id_search {
@@ -1467,10 +760,10 @@ impl AppState {
                    AND uploads.deleted_at IS NULL
                    AND uploads.level_id = $2",
             )
-            .bind(user_id)
-            .bind(level_id)
-            .fetch_one(&*self.pool)
-            .await?
+                .bind(user_id)
+                .bind(level_id)
+                .fetch_one(&*self.pool)
+                .await?
         } else {
             sqlx::query_scalar(
                 "SELECT COUNT(*)
@@ -1480,9 +773,9 @@ impl AppState {
                    AND uploads.accepted_time IS NOT NULL
                    AND uploads.deleted_at IS NULL",
             )
-            .bind(user_id)
-            .fetch_one(&*self.pool)
-            .await?
+                .bind(user_id)
+                .fetch_one(&*self.pool)
+                .await?
         };
 
         Ok(MyUploadsSummary { active, pending, rejected })
@@ -1493,9 +786,9 @@ impl AppState {
             "{} AND uploads.id = $1",
             PENDING_UPLOAD_SELECT
         ))
-        .bind(id)
-        .fetch_one(&*self.pool)
-        .await
+            .bind(id)
+            .fetch_one(&*self.pool)
+            .await
     }
 
     pub async fn get_admin_users_paginated(
@@ -1512,14 +805,14 @@ impl AppState {
         let offset = options.page.saturating_sub(1) as i64 * per_page;
 
         let mut data_builder = QueryBuilder::new(data_query);
-        Self::apply_user_filters(&mut data_builder, &options);
-        Self::apply_user_sort(&mut data_builder, options.sort_by, options.sort_dir);
+        apply_user_filters(&mut data_builder, &options);
+        apply_user_sort(&mut data_builder, options.sort_by, options.sort_dir);
         data_builder.push(" LIMIT ").push_bind(per_page).push(" OFFSET ").push_bind(offset);
 
         let users = data_builder.build_query_as::<AdminUserRow>().fetch_all(&*self.pool).await?;
 
         let mut count_builder = QueryBuilder::new(count_query);
-        Self::apply_user_filters(&mut count_builder, &options);
+        apply_user_filters(&mut count_builder, &options);
         let total: i64 = count_builder.build_query_scalar().fetch_one(&*self.pool).await?;
 
         Ok(AdminUsersPage { users, total })
@@ -1698,11 +991,11 @@ impl AppState {
                 (SELECT COUNT(*) FROM uploads WHERE accepted = TRUE)
             )",
         )
-        .bind(storage_bytes)
-        .bind(thumbnails_count)
-        .bind(users_per_month)
-        .execute(&*self.pool)
-        .await?;
+            .bind(storage_bytes)
+            .bind(thumbnails_count)
+            .bind(users_per_month)
+            .execute(&*self.pool)
+            .await?;
 
         Ok(())
     }
@@ -1726,9 +1019,9 @@ impl AppState {
              ORDER BY captured_at DESC, id DESC
              LIMIT $1",
         )
-        .bind(limit)
-        .fetch_all(&*self.pool)
-        .await
+            .bind(limit)
+            .fetch_all(&*self.pool)
+            .await
     }
 
     pub async fn get_recent_stats_snapshots_ascending(
@@ -1760,8 +1053,8 @@ impl AppState {
         sqlx::query_scalar(
             "SELECT COUNT(*) FROM uploads WHERE accepted = FALSE AND accepted_time IS NULL",
         )
-        .fetch_one(&*self.pool)
-        .await
+            .fetch_one(&*self.pool)
+            .await
     }
 
     pub async fn get_user_ban(&self, user_id: i64) -> Result<Option<UserBan>, sqlx::Error> {
@@ -1772,9 +1065,9 @@ impl AppState {
              ORDER BY ban_time DESC
              LIMIT 1",
         )
-        .bind(user_id)
-        .fetch_optional(&*self.pool)
-        .await
+            .bind(user_id)
+            .fetch_optional(&*self.pool)
+            .await
     }
 
     pub async fn ban_user(
@@ -1788,12 +1081,12 @@ impl AppState {
             "INSERT INTO bans (user_id, reason, banned_by, expires_at)
              VALUES ($1, $2, $3, $4)",
         )
-        .bind(user_id)
-        .bind(reason)
-        .bind(banned_by)
-        .bind(expires_at)
-        .execute(&*self.pool)
-        .await?;
+            .bind(user_id)
+            .bind(reason)
+            .bind(banned_by)
+            .bind(expires_at)
+            .execute(&*self.pool)
+            .await?;
 
         Ok(())
     }
@@ -1811,9 +1104,9 @@ impl AppState {
              ) sel
              WHERE bans.id = sel.bid",
         )
-        .bind(user_id)
-        .execute(&*self.pool)
-        .await?;
+            .bind(user_id)
+            .execute(&*self.pool)
+            .await?;
 
         Ok(result.rows_affected() > 0)
     }
@@ -1833,8 +1126,4 @@ impl AppState {
             .fetch_one(&*self.pool)
             .await
     }
-}
-
-pub async fn get_db() -> AppState {
-    AppState::new().await
 }
