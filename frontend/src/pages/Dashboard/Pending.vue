@@ -15,12 +15,13 @@ const REJECT_PRESETS = [
   "Dead/About to die",
   "Noclip",
   "Obvious speedhack",
-  "Visible overlays",
-  "Low quality",
   "No gameplay in thumbnail",
   "Too close to start",
   "Texture Pack",
-  "High Quality mobile texture bug",
+  "Enter Effect bug",
+  "No Glow",
+  "No Particles",
+  "Cutoff Deco",
   "Title Card"
 ];
 
