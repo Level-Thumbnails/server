@@ -1,15 +1,23 @@
+use crate::db::filters::{
+    apply_pending_filters, apply_pending_sort, apply_user_filters, apply_user_sort,
+};
+use crate::db::{
+    ActiveUpload, ActiveUploadsPage, AdminUserQueryOptions, AdminUserRow, AdminUsersPage, AppState,
+    BadgeLists, LevelLock, MAX_MY_UPLOADS_PAGE_SIZE, MyUploadsSummary, NoteData,
+    PENDING_UPLOAD_SELECT, PendingQueryOptions, PendingUpload, PendingUploadsPage, RejectedUpload,
+    RejectedUploadsPage, Settings, StatsSnapshot, USER_STATS_CTE, UpdateUserOptions,
+    UploadExtended, UploadInfo, User, UserBan, UserHistoryPoint, UserStats,
+};
+use crate::util;
+use crate::util::ModUserAgent;
+use chrono::{Datelike, NaiveDate, NaiveDateTime, Utc};
+use sqlx::postgres::PgPoolOptions;
+use sqlx::{FromRow, Postgres, QueryBuilder};
 use std::collections::{HashMap, HashSet};
 use std::path::Path;
 use std::sync::Arc;
-use chrono::{Datelike, NaiveDate, NaiveDateTime, Utc};
-use sqlx::{FromRow, Postgres, QueryBuilder};
-use sqlx::postgres::PgPoolOptions;
 use tokio::sync::RwLock;
 use tracing::{error, warn};
-use crate::db::{ActiveUpload, ActiveUploadsPage, AdminUserQueryOptions, AdminUserRow, AdminUsersPage, AppState, BadgeLists, LevelLock, MyUploadsSummary, NoteData, PendingQueryOptions, PendingUpload, PendingUploadsPage, RejectedUpload, RejectedUploadsPage, Settings, StatsSnapshot, UpdateUserOptions, UploadExtended, UploadInfo, User, UserBan, UserHistoryPoint, UserStats, MAX_MY_UPLOADS_PAGE_SIZE, PENDING_UPLOAD_SELECT, USER_STATS_CTE};
-use crate::db::filters::{apply_pending_filters, apply_user_filters, apply_user_sort};
-use crate::util;
-use crate::util::ModUserAgent;
 
 fn month_start(date: NaiveDate) -> NaiveDate {
     NaiveDate::from_ymd_opt(date.year(), date.month(), 1).expect("invalid month start")
@@ -37,10 +45,10 @@ async fn migrate_submission_notes_perform(pool: &sqlx::Pool<Postgres>) -> Result
     }
 
     let rows = sqlx::query_as::<_, UploadRow>(
-        "SELECT id, submission_note FROM uploads WHERE submission_note IS NOT NULL"
+        "SELECT id, submission_note FROM uploads WHERE submission_note IS NOT NULL",
     )
-        .fetch_all(&mut *tx)
-        .await?;
+    .fetch_all(&mut *tx)
+    .await?;
 
     for row in rows {
         let upload_id: i64 = row.id;
@@ -71,7 +79,9 @@ async fn migrate_submission_notes_perform(pool: &sqlx::Pool<Postgres>) -> Result
                 .await?;
         } else {
             error!("Failed to parse submission_note for upload id {}: {}", upload_id, legacy_note);
-            return Err(sqlx::Error::Protocol(format!("Failed to parse submission_note for upload id {}", upload_id).into()));
+            return Err(sqlx::Error::Protocol(
+                format!("Failed to parse submission_note for upload id {}", upload_id).into(),
+            ));
         }
     }
 
@@ -88,9 +98,9 @@ async fn migrate_submission_notes(pool: &sqlx::Pool<Postgres>) {
             WHERE table_name='uploads' AND column_name='submission_note'
         )",
     )
-        .fetch_one(pool)
-        .await
-        .expect("Failed to check for submission_note column");
+    .fetch_one(pool)
+    .await
+    .expect("Failed to check for submission_note column");
 
     if row {
         warn!("Migrating old 'submission_note' column");
@@ -111,11 +121,11 @@ async fn migrate_submission_notes(pool: &sqlx::Pool<Postgres>) {
 
 async fn migrate_hardlink_storage(pool: &sqlx::Pool<Postgres>) {
     let migrated: bool = sqlx::query_scalar(
-        "SELECT COALESCE((SELECT hardlink_storage_migrated FROM migration_state LIMIT 1), FALSE)"
+        "SELECT COALESCE((SELECT hardlink_storage_migrated FROM migration_state LIMIT 1), FALSE)",
     )
-        .fetch_one(pool)
-        .await
-        .expect("Failed to check hardlink_storage_migrated");
+    .fetch_one(pool)
+    .await
+    .expect("Failed to check hardlink_storage_migrated");
 
     if migrated {
         return;
@@ -135,23 +145,27 @@ async fn migrate_hardlink_storage(pool: &sqlx::Pool<Postgres>) {
                 ORDER BY uploads.level_id, uploads.upload_time DESC, uploads.id DESC
             )
             SELECT id, level_id
-            FROM active_uploads"
+            FROM active_uploads",
     )
-        .fetch_all(pool)
-        .await
-        .expect("Failed to fetch active uploads");
+    .fetch_all(pool)
+    .await
+    .expect("Failed to fetch active uploads");
 
     for (upload_id, level_id) in uploads {
         let old_path = format!("thumbnails/{}.webp", level_id);
         let new_path = util::get_upload_path(upload_id);
 
-        if let Err(e) = util::move_file_with_dirs(Path::new(&old_path), Path::new(&new_path)).await {
+        if let Err(e) = util::move_file_with_dirs(Path::new(&old_path), Path::new(&new_path)).await
+        {
             error!("Failed to migrate upload {} for level {}: {}", upload_id, level_id, e);
             continue;
         }
 
         if let Err(e) = tokio::fs::hard_link(&new_path, &old_path).await {
-            error!("Failed to create hard link for upload {} for level {}: {}", upload_id, level_id, e);
+            error!(
+                "Failed to create hard link for upload {} for level {}: {}",
+                upload_id, level_id, e
+            );
             continue;
         }
     }
@@ -167,7 +181,8 @@ async fn migrate_hardlink_storage(pool: &sqlx::Pool<Postgres>) {
         let old_path = format!("uploads/{}_{}.webp", user_id, level_id);
         let new_path = util::get_upload_path(upload_id);
 
-        if let Err(e) = util::move_file_with_dirs(Path::new(&old_path), Path::new(&new_path)).await {
+        if let Err(e) = util::move_file_with_dirs(Path::new(&old_path), Path::new(&new_path)).await
+        {
             error!("Failed to migrate pending upload {} for level {}: {}", upload_id, level_id, e);
             continue;
         }
@@ -208,12 +223,15 @@ impl AppState {
         let mut set: HashSet<i64>;
         {
             #[derive(Debug, FromRow)]
-            struct Row { account_id: i64 }
+            struct Row {
+                account_id: i64,
+            }
 
-            let rows: Vec<Row> = sqlx::query_as("SELECT account_id FROM users WHERE account_id != -1")
-                .fetch_all(&pool)
-                .await
-                .expect("Failed to fetch registered users");
+            let rows: Vec<Row> =
+                sqlx::query_as("SELECT account_id FROM users WHERE account_id != -1")
+                    .fetch_all(&pool)
+                    .await
+                    .expect("Failed to fetch registered users");
 
             set = HashSet::with_capacity(rows.len());
             for row in rows {
@@ -256,10 +274,10 @@ impl AppState {
              WHERE uploads.level_id = $1 AND accepted = TRUE AND uploads.deleted_at IS NULL
              ORDER BY upload_time DESC LIMIT 1",
         )
-            .bind(id)
-            .fetch_optional(&*self.pool)
-            .await
-            .ok()?
+        .bind(id)
+        .fetch_optional(&*self.pool)
+        .await
+        .ok()?
     }
 
     pub async fn get_upload_extended(&self, id: i64) -> Option<UploadExtended> {
@@ -332,9 +350,9 @@ impl AppState {
         let legacy_user = sqlx::query_as::<_, User>(
             "SELECT * FROM users WHERE account_id = -1 AND username = $1 AND discord_id IS NULL",
         )
-            .bind(username)
-            .fetch_optional(&*self.pool)
-            .await?;
+        .bind(username)
+        .fetch_optional(&*self.pool)
+        .await?;
 
         if let Some(legacy_user) = legacy_user {
             // update the legacy user with the discord_id
@@ -452,11 +470,11 @@ impl AppState {
                      upload_time = NOW()
                  RETURNING id",
             )
-                .bind(level_id)
-                .bind(user_id)
-                .bind(image_path)
-                .fetch_one(&*self.pool)
-                .await?
+            .bind(level_id)
+            .bind(user_id)
+            .bind(image_path)
+            .fetch_one(&*self.pool)
+            .await?
         };
 
         sqlx::query(
@@ -512,9 +530,9 @@ impl AppState {
              JOIN users ON users.id = level_locks.locked_by
              WHERE level_locks.level_id = $1",
         )
-            .bind(level_id)
-            .fetch_optional(&*self.pool)
-            .await
+        .bind(level_id)
+        .fetch_optional(&*self.pool)
+        .await
     }
 
     pub async fn get_all_level_locks(&self) -> Result<Vec<LevelLock>, sqlx::Error> {
@@ -529,8 +547,8 @@ impl AppState {
              JOIN users ON users.id = level_locks.locked_by
              ORDER BY level_locks.locked_at DESC, level_locks.level_id DESC",
         )
-            .fetch_all(&*self.pool)
-            .await
+        .fetch_all(&*self.pool)
+        .await
     }
 
     pub async fn lock_level(
@@ -548,11 +566,11 @@ impl AppState {
                  reason = EXCLUDED.reason,
                  locked_at = NOW()",
         )
-            .bind(level_id)
-            .bind(locked_by)
-            .bind(reason)
-            .execute(&*self.pool)
-            .await?;
+        .bind(level_id)
+        .bind(locked_by)
+        .bind(reason)
+        .execute(&*self.pool)
+        .await?;
 
         Ok(())
     }
@@ -571,9 +589,9 @@ impl AppState {
             "UPDATE uploads SET deleted_at = NOW()
              WHERE level_id = $1 AND accepted = TRUE AND deleted_at IS NULL",
         )
-            .bind(level_id)
-            .execute(&*self.pool)
-            .await?;
+        .bind(level_id)
+        .execute(&*self.pool)
+        .await?;
 
         Ok(result.rows_affected() > 0)
     }
@@ -585,7 +603,7 @@ impl AppState {
         if options.replacement_only || options.new_only {
             let mut builder = QueryBuilder::new(PENDING_UPLOAD_SELECT);
             apply_pending_filters(&mut builder, &options);
-            builder.push(" ORDER BY upload_time ASC, uploads.id ASC");
+            apply_pending_sort(&mut builder, options.sort_by, options.sort_dir);
 
             let mut all_uploads =
                 builder.build_query_as::<PendingUpload>().fetch_all(&*self.pool).await?;
@@ -607,11 +625,8 @@ impl AppState {
 
             let mut data_builder = QueryBuilder::new(PENDING_UPLOAD_SELECT);
             apply_pending_filters(&mut data_builder, &options);
-            data_builder
-                .push(" ORDER BY upload_time ASC, uploads.id ASC LIMIT ")
-                .push_bind(per_page)
-                .push(" OFFSET ")
-                .push_bind(offset);
+            apply_pending_sort(&mut data_builder, options.sort_by, options.sort_dir);
+            data_builder.push(" LIMIT ").push_bind(per_page).push(" OFFSET ").push_bind(offset);
 
             let uploads =
                 data_builder.build_query_as::<PendingUpload>().fetch_all(&*self.pool).await?;
@@ -619,6 +634,7 @@ impl AppState {
             let mut count_builder = QueryBuilder::new(
                 "SELECT COUNT(*) FROM uploads
                  LEFT JOIN users ON users.id = user_id
+                 LEFT JOIN notes ON notes.upload_id = uploads.id
                  WHERE accepted = FALSE AND accepted_time IS NULL",
             );
             apply_pending_filters(&mut count_builder, &options);
@@ -636,9 +652,9 @@ impl AppState {
             "{} AND user_id = $1 ORDER BY upload_time",
             PENDING_UPLOAD_SELECT
         ))
-            .bind(user_id)
-            .fetch_all(&*self.pool)
-            .await
+        .bind(user_id)
+        .fetch_all(&*self.pool)
+        .await
     }
 
     pub async fn get_user_active_uploads_paginated(
@@ -674,12 +690,12 @@ impl AppState {
             ORDER BY upload_time DESC, id DESC
             LIMIT $2 OFFSET $3",
         )
-            .bind(user_id)
-            .bind(per_page)
-            .bind(offset)
-            .bind(level_id_search)
-            .fetch_all(&*self.pool)
-            .await?;
+        .bind(user_id)
+        .bind(per_page)
+        .bind(offset)
+        .bind(level_id_search)
+        .fetch_all(&*self.pool)
+        .await?;
 
         let total: i64 = sqlx::query_scalar(
             "WITH active_uploads AS (
@@ -733,12 +749,12 @@ impl AppState {
             ORDER BY uploads.accepted_time DESC, uploads.id DESC
             LIMIT $2 OFFSET $3",
         )
-            .bind(user_id)
-            .bind(per_page)
-            .bind(offset)
-            .bind(level_id_search)
-            .fetch_all(&*self.pool)
-            .await?;
+        .bind(user_id)
+        .bind(per_page)
+        .bind(offset)
+        .bind(level_id_search)
+        .fetch_all(&*self.pool)
+        .await?;
 
         let total: i64 = sqlx::query_scalar(
             "SELECT COUNT(*)
@@ -749,10 +765,10 @@ impl AppState {
                AND uploads.deleted_at IS NULL
                AND ($2::BIGINT IS NULL OR uploads.level_id = $2)",
         )
-            .bind(user_id)
-            .bind(level_id_search)
-            .fetch_one(&*self.pool)
-            .await?;
+        .bind(user_id)
+        .bind(level_id_search)
+        .fetch_one(&*self.pool)
+        .await?;
 
         Ok(RejectedUploadsPage { uploads, total })
     }
@@ -776,10 +792,10 @@ impl AppState {
                 )
                 SELECT COUNT(*) FROM active_uploads WHERE user_id = $1 AND level_id = $2",
             )
-                .bind(user_id)
-                .bind(level_id)
-                .fetch_one(&*self.pool)
-                .await?
+            .bind(user_id)
+            .bind(level_id)
+            .fetch_one(&*self.pool)
+            .await?
         } else {
             sqlx::query_scalar(
                 "WITH active_uploads AS (
@@ -791,9 +807,9 @@ impl AppState {
                 )
                 SELECT COUNT(*) FROM active_uploads WHERE user_id = $1",
             )
-                .bind(user_id)
-                .fetch_one(&*self.pool)
-                .await?
+            .bind(user_id)
+            .fetch_one(&*self.pool)
+            .await?
         };
 
         let pending = if let Some(level_id) = level_id_search {
@@ -806,10 +822,10 @@ impl AppState {
                    AND uploads.deleted_at IS NULL
                    AND uploads.level_id = $2",
             )
-                .bind(user_id)
-                .bind(level_id)
-                .fetch_one(&*self.pool)
-                .await?
+            .bind(user_id)
+            .bind(level_id)
+            .fetch_one(&*self.pool)
+            .await?
         } else {
             sqlx::query_scalar(
                 "SELECT COUNT(*)
@@ -819,9 +835,9 @@ impl AppState {
                    AND uploads.accepted_time IS NULL
                    AND uploads.deleted_at IS NULL",
             )
-                .bind(user_id)
-                .fetch_one(&*self.pool)
-                .await?
+            .bind(user_id)
+            .fetch_one(&*self.pool)
+            .await?
         };
 
         let rejected = if let Some(level_id) = level_id_search {
@@ -834,10 +850,10 @@ impl AppState {
                    AND uploads.deleted_at IS NULL
                    AND uploads.level_id = $2",
             )
-                .bind(user_id)
-                .bind(level_id)
-                .fetch_one(&*self.pool)
-                .await?
+            .bind(user_id)
+            .bind(level_id)
+            .fetch_one(&*self.pool)
+            .await?
         } else {
             sqlx::query_scalar(
                 "SELECT COUNT(*)
@@ -847,9 +863,9 @@ impl AppState {
                    AND uploads.accepted_time IS NOT NULL
                    AND uploads.deleted_at IS NULL",
             )
-                .bind(user_id)
-                .fetch_one(&*self.pool)
-                .await?
+            .bind(user_id)
+            .fetch_one(&*self.pool)
+            .await?
         };
 
         Ok(MyUploadsSummary { active, pending, rejected })
@@ -871,11 +887,11 @@ impl AppState {
             FROM uploads
             LEFT JOIN users ON users.id = user_id
             LEFT JOIN notes ON notes.upload_id = uploads.id
-            WHERE uploads.id = $1"#
+            WHERE uploads.id = $1"#,
         )
-            .bind(id)
-            .fetch_one(&*self.pool)
-            .await
+        .bind(id)
+        .fetch_one(&*self.pool)
+        .await
     }
 
     pub async fn get_admin_users_paginated(
@@ -1078,11 +1094,11 @@ impl AppState {
                 (SELECT COUNT(*) FROM uploads WHERE accepted = TRUE)
             )",
         )
-            .bind(storage_bytes)
-            .bind(thumbnails_count)
-            .bind(users_per_month)
-            .execute(&*self.pool)
-            .await?;
+        .bind(storage_bytes)
+        .bind(thumbnails_count)
+        .bind(users_per_month)
+        .execute(&*self.pool)
+        .await?;
 
         Ok(())
     }
@@ -1106,9 +1122,9 @@ impl AppState {
              ORDER BY captured_at DESC, id DESC
              LIMIT $1",
         )
-            .bind(limit)
-            .fetch_all(&*self.pool)
-            .await
+        .bind(limit)
+        .fetch_all(&*self.pool)
+        .await
     }
 
     pub async fn get_recent_stats_snapshots_ascending(
@@ -1140,8 +1156,8 @@ impl AppState {
         sqlx::query_scalar(
             "SELECT COUNT(*) FROM uploads WHERE accepted = FALSE AND accepted_time IS NULL",
         )
-            .fetch_one(&*self.pool)
-            .await
+        .fetch_one(&*self.pool)
+        .await
     }
 
     pub async fn get_user_ban(&self, user_id: i64) -> Result<Option<UserBan>, sqlx::Error> {
@@ -1152,9 +1168,9 @@ impl AppState {
              ORDER BY ban_time DESC
              LIMIT 1",
         )
-            .bind(user_id)
-            .fetch_optional(&*self.pool)
-            .await
+        .bind(user_id)
+        .fetch_optional(&*self.pool)
+        .await
     }
 
     pub async fn ban_user(
@@ -1162,18 +1178,18 @@ impl AppState {
         user_id: i64,
         reason: String,
         banned_by: i64,
-        expires_at: Option<NaiveDateTime>
+        expires_at: Option<NaiveDateTime>,
     ) -> Result<(), sqlx::Error> {
         sqlx::query(
             "INSERT INTO bans (user_id, reason, banned_by, expires_at)
              VALUES ($1, $2, $3, $4)",
         )
-            .bind(user_id)
-            .bind(reason)
-            .bind(banned_by)
-            .bind(expires_at)
-            .execute(&*self.pool)
-            .await?;
+        .bind(user_id)
+        .bind(reason)
+        .bind(banned_by)
+        .bind(expires_at)
+        .execute(&*self.pool)
+        .await?;
 
         Ok(())
     }
@@ -1191,9 +1207,9 @@ impl AppState {
              ) sel
              WHERE bans.id = sel.bid",
         )
-            .bind(user_id)
-            .execute(&*self.pool)
-            .await?;
+        .bind(user_id)
+        .execute(&*self.pool)
+        .await?;
 
         Ok(result.rows_affected() > 0)
     }

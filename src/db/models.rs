@@ -1,9 +1,11 @@
+use crate::db::{
+    Difficulty, Length, PendingUploadSortBy, Rating, Role, SortDirection, UserListSortBy,
+};
+use crate::util::{ModUserAgent, ParsedSubmissionNote};
 use chrono::{NaiveDate, NaiveDateTime};
 use serde::{Deserialize, Serialize};
 use sqlx::FromRow;
 use sqlx::types::Json;
-use crate::db::{Difficulty, Length, Rating, Role, SortDirection, UserListSortBy};
-use crate::util::{ModUserAgent, ParsedSubmissionNote};
 
 fn serialize_discord_snowflake<S>(value: &Option<i64>, serializer: S) -> Result<S::Ok, S::Error>
 where
@@ -14,7 +16,6 @@ where
         None => serializer.serialize_none(),
     }
 }
-
 
 #[derive(Debug, FromRow, Serialize)]
 pub struct User {
@@ -90,7 +91,7 @@ impl NoteData {
                 3 => Length::Long,
                 4 => Length::XL,
                 5 => Length::Plat,
-                _ => Length::Tiny
+                _ => Length::Tiny,
             },
             rating: match note.rating {
                 0 => Rating::NA,
@@ -99,7 +100,7 @@ impl NoteData {
                 3 => Rating::Epic,
                 4 => Rating::Legendary,
                 5 => Rating::Mythic,
-                _ => Rating::NA
+                _ => Rating::NA,
             },
             difficulty: match note.difficulty {
                 0 => Difficulty::NA,
@@ -114,7 +115,7 @@ impl NoteData {
                 9 => Difficulty::HardDemon,
                 10 => Difficulty::InsaneDemon,
                 11 => Difficulty::ExtremeDemon,
-                _ => Difficulty::NA
+                _ => Difficulty::NA,
             },
             percentage: note.percentage,
             attempt_time: note.attempt_time,
@@ -186,8 +187,13 @@ pub struct PendingQueryOptions {
     pub level_id: Option<i64>,
     pub user_id: Option<i64>,
     pub username: Option<String>,
+    pub search: Option<String>,
+    pub rated_only: bool,
+    pub from_creator_only: bool,
     pub replacement_only: bool,
     pub new_only: bool,
+    pub sort_by: PendingUploadSortBy,
+    pub sort_dir: SortDirection,
 }
 
 #[derive(Debug, Clone)]

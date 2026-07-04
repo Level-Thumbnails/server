@@ -1,5 +1,5 @@
-use serde::{Deserialize, Serialize};
 use crate::util::VersionInfo;
+use serde::{Deserialize, Serialize};
 
 pub fn default_min_supported_client() -> VersionInfo {
     VersionInfo::from_str("v2.1.0").expect("Invalid default version")
@@ -131,15 +131,7 @@ impl Role {
     }
 }
 
-#[derive(
-    Debug,
-    Clone,
-    Copy,
-    Serialize,
-    Deserialize,
-    sqlx::Type,
-    utoipa::ToSchema
-)]
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, sqlx::Type, utoipa::ToSchema)]
 #[sqlx(type_name = "length_enum")]
 pub enum Length {
     Tiny,
@@ -150,15 +142,7 @@ pub enum Length {
     Plat,
 }
 
-#[derive(
-    Debug,
-    Clone,
-    Copy,
-    Serialize,
-    Deserialize,
-    sqlx::Type,
-    utoipa::ToSchema
-)]
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, sqlx::Type, utoipa::ToSchema)]
 #[sqlx(type_name = "rating_enum")]
 pub enum Rating {
     NA,
@@ -166,18 +150,10 @@ pub enum Rating {
     Featured,
     Epic,
     Legendary,
-    Mythic
+    Mythic,
 }
 
-#[derive(
-    Debug,
-    Clone,
-    Copy,
-    Serialize,
-    Deserialize,
-    sqlx::Type,
-    utoipa::ToSchema
-)]
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, sqlx::Type, utoipa::ToSchema)]
 #[sqlx(type_name = "difficulty_enum")]
 pub enum Difficulty {
     NA,
@@ -191,7 +167,7 @@ pub enum Difficulty {
     MediumDemon,
     HardDemon,
     InsaneDemon,
-    ExtremeDemon
+    ExtremeDemon,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize, Serialize)]
@@ -208,6 +184,18 @@ pub enum UserListSortBy {
     Rejected,
     ActiveThumbnails,
     Banned,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum PendingUploadSortBy {
+    UploadTime,
+    LevelId,
+    LevelName,
+    CreatorName,
+    Username,
+    Stars,
+    Rating,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize, Serialize)]

@@ -11,18 +11,30 @@ trait MyUploadsPageLike<T> {
 }
 
 impl MyUploadsPageLike<db::ActiveUpload> for db::ActiveUploadsPage {
-    fn uploads(self) -> Vec<db::ActiveUpload> { self.uploads }
-    fn total(&self) -> i64 { self.total }
+    fn uploads(self) -> Vec<db::ActiveUpload> {
+        self.uploads
+    }
+    fn total(&self) -> i64 {
+        self.total
+    }
 }
 
 impl MyUploadsPageLike<db::PendingUpload> for db::PendingUploadsPage {
-    fn uploads(self) -> Vec<db::PendingUpload> { self.uploads }
-    fn total(&self) -> i64 { self.total }
+    fn uploads(self) -> Vec<db::PendingUpload> {
+        self.uploads
+    }
+    fn total(&self) -> i64 {
+        self.total
+    }
 }
 
 impl MyUploadsPageLike<db::RejectedUpload> for db::RejectedUploadsPage {
-    fn uploads(self) -> Vec<db::RejectedUpload> { self.uploads }
-    fn total(&self) -> i64 { self.total }
+    fn uploads(self) -> Vec<db::RejectedUpload> {
+        self.uploads
+    }
+    fn total(&self) -> i64 {
+        self.total
+    }
 }
 
 pub async fn get_user_info(id: i64, db: &db::AppState) -> Response {
@@ -78,11 +90,7 @@ pub struct HistoryQueryParams {
     pub months: Option<i64>,
 }
 
-async fn get_history_response(
-    user_id: i64,
-    months: i64,
-    db: &db::AppState,
-) -> Response {
+async fn get_history_response(user_id: i64, months: i64, db: &db::AppState) -> Response {
     match db.get_user_history(user_id, months).await {
         Ok(history) => util::response(
             StatusCode::OK,
@@ -153,9 +161,10 @@ impl MyUploadsQueryParams {
         self.page = self.page.max(1);
         self.per_page = self.per_page.max(1).min(MAX_MY_UPLOADS_PAGE_SIZE);
 
-        self.level_id_search = self.level_id_search.as_ref().and_then(|s| {
-            if s.trim().is_empty() { None } else { Some(s.trim().to_string()) }
-        });
+        self.level_id_search = self
+            .level_id_search
+            .as_ref()
+            .and_then(|s| if s.trim().is_empty() { None } else { Some(s.trim().to_string()) });
 
         self
     }
@@ -178,9 +187,11 @@ pub async fn get_my_active_uploads(
                 params.per_page,
                 params.level_id_search,
                 None,
-            ).await
+            )
+            .await
         },
-    ).await
+    )
+    .await
 }
 
 #[derive(Debug, Serialize)]
@@ -238,11 +249,18 @@ pub async fn get_my_pending_uploads(
                 level_id: params.level_id_search.and_then(|s| s.parse::<i64>().ok()),
                 user_id: Some(user_id),
                 username: None,
+                search: None,
+                rated_only: false,
+                from_creator_only: false,
                 replacement_only: false,
                 new_only: false,
-            }).await
+                sort_by: db::PendingUploadSortBy::UploadTime,
+                sort_dir: db::SortDirection::Asc,
+            })
+            .await
         },
-    ).await
+    )
+    .await
 }
 
 pub async fn get_my_rejected_uploads(
@@ -265,7 +283,8 @@ pub async fn get_my_rejected_uploads(
             )
             .await
         },
-    ).await
+    )
+    .await
 }
 
 async fn get_my_uploads_page_response<T, P, F, Fut>(
@@ -290,7 +309,10 @@ where
     let page = match fetcher(user.id, params.clone(), db.clone()).await {
         Ok(page) => page,
         Err(e) => {
-            return util::str_response(StatusCode::INTERNAL_SERVER_ERROR, &format!("{}: {}", error_label, e));
+            return util::str_response(
+                StatusCode::INTERNAL_SERVER_ERROR,
+                &format!("{}: {}", error_label, e),
+            );
         }
     };
 
@@ -321,7 +343,7 @@ pub async fn get_user_badges(State(db): State<db::AppState>) -> Response {
         Err(e) => {
             return util::str_response(
                 StatusCode::INTERNAL_SERVER_ERROR,
-                &format!("Failed to fetch user badges: {}", e)
+                &format!("Failed to fetch user badges: {}", e),
             );
         }
     };

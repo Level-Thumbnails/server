@@ -1,5 +1,8 @@
+use crate::db::{
+    AdminUserQueryOptions, PendingQueryOptions, PendingUploadSortBy, Role, SortDirection,
+    UserListSortBy,
+};
 use sqlx::{Postgres, QueryBuilder};
-use crate::db::{AdminUserQueryOptions, PendingQueryOptions, Role, SortDirection, UserListSortBy};
 
 pub fn apply_pending_filters<'a>(
     builder: &mut QueryBuilder<'a, Postgres>,
@@ -15,10 +18,63 @@ pub fn apply_pending_filters<'a>(
 
     if let Some(ref username) = options.username {
         builder
-            .push(" AND LOWER(username) LIKE LOWER(")
+            .push(" AND LOWER(users.username) LIKE LOWER(")
             .push_bind(format!("%{}%", username))
             .push(")");
     }
+
+    if let Some(ref search) = options.search {
+        let search = search.trim();
+        if !search.is_empty() {
+            let pattern = format!("%{}%", search);
+            builder
+                .push(" AND (LOWER(notes.level_name) LIKE LOWER(")
+                .push_bind(pattern.clone())
+                .push(") OR LOWER(notes.creator_name) LIKE LOWER(")
+                .push_bind(pattern)
+                .push("))");
+        }
+    }
+
+    if options.rated_only {
+        builder.push(" AND notes.rating IS NOT NULL AND notes.rating != 'NA'::rating_enum");
+    }
+
+    if options.from_creator_only {
+        builder.push(" AND users.account_id IS NOT NULL AND notes.creator_id = users.account_id");
+    }
+}
+
+pub fn apply_pending_sort(
+    builder: &mut QueryBuilder<'_, Postgres>,
+    sort_by: PendingUploadSortBy,
+    sort_direction: SortDirection,
+) {
+    let direction = match sort_direction {
+        SortDirection::Asc => "ASC",
+        SortDirection::Desc => "DESC",
+    };
+
+    builder.push(" ORDER BY ");
+    match sort_by {
+        PendingUploadSortBy::UploadTime => builder.push("upload_time ").push(direction),
+        PendingUploadSortBy::LevelId => builder.push("uploads.level_id ").push(direction),
+        PendingUploadSortBy::LevelName => {
+            builder.push("LOWER(notes.level_name) ").push(direction).push(" NULLS LAST")
+        }
+        PendingUploadSortBy::CreatorName => {
+            builder.push("LOWER(notes.creator_name) ").push(direction).push(" NULLS LAST")
+        }
+        PendingUploadSortBy::Username => builder.push("LOWER(users.username) ").push(direction),
+        PendingUploadSortBy::Stars => {
+            builder.push("notes.stars ").push(direction).push(" NULLS LAST")
+        }
+        PendingUploadSortBy::Rating => {
+            builder.push("notes.rating ").push(direction).push(" NULLS LAST")
+        }
+    };
+
+    builder.push(", uploads.id ").push(direction);
 }
 
 pub fn apply_user_filters<'a>(

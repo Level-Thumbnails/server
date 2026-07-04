@@ -45,6 +45,11 @@ const settings = SettingsManager.getSettings();
 const filterUsername = ref<string>("");
 const filterLevelId = ref<string>("");
 const filterReplacement = ref<string>(settings.replacement_filter); // "all", "replacement", "new"
+const filterSearch = ref<string>("");
+const filterRatedOnly = ref(settings.pending_rated_only);
+const filterFromCreatorOnly = ref(settings.pending_from_creator_only);
+const sortBy = ref<'upload_time' | 'level_id' | 'level_name' | 'creator_name' | 'username' | 'stars' | 'rating'>(settings.pending_sort_by);
+const sortDir = ref<'asc' | 'desc'>(settings.pending_sort_dir);
 
 let debounceTimer: ReturnType<typeof setTimeout> | null = null;
 
@@ -116,7 +121,7 @@ async function openPendingItemById(id: number, fromDirectLink = false) {
   }
 }
 
-watch([filterLevelId, filterUsername], () => {
+watch([filterLevelId, filterUsername, filterSearch], () => {
   currentPage.value = 1;
 
   if (debounceTimer) {
@@ -127,6 +132,18 @@ watch([filterLevelId, filterUsername], () => {
   debounceTimer = setTimeout(() => {
     fetchPendingItems();
   }, 500);
+});
+
+watch([filterRatedOnly, filterFromCreatorOnly, sortBy, sortDir], () => {
+  currentPage.value = 1;
+  fetchPendingItems();
+
+  const settings = SettingsManager.getSettings();
+  settings.pending_sort_by = sortBy.value;
+  settings.pending_sort_dir = sortDir.value;
+  settings.pending_rated_only = filterRatedOnly.value;
+  settings.pending_from_creator_only = filterFromCreatorOnly.value;
+  SettingsManager.saveSettings(settings);
 });
 
 watch(filterReplacement, () => {
@@ -182,11 +199,26 @@ async function fetchPendingItems() {
       params.append('username', filterUsername.value.trim());
     }
 
+    if (filterSearch.value.trim() !== "") {
+      params.append('search', filterSearch.value.trim());
+    }
+
+    if (filterRatedOnly.value) {
+      params.append('rated_only', 'true');
+    }
+
+    if (filterFromCreatorOnly.value) {
+      params.append('from_creator_only', 'true');
+    }
+
     if (filterReplacement.value === "replacement") {
       params.append('replacement_only', 'true');
     } else if (filterReplacement.value === "new") {
       params.append('new_only', 'true');
     }
+
+    params.append('sort_by', sortBy.value);
+    params.append('sort_dir', sortDir.value);
 
     const data = await fetchJson<PendingResponse>(`/pending?${params.toString()}`);
     pendingItems.value = data.uploads;
@@ -551,6 +583,33 @@ function roleIcon(role: string) {
             </select>
           </div>
           <div class="filter-item">
+            <label for="sortBy">Sort by:</label>
+            <select
+                id="sortBy"
+                v-model="sortBy"
+                class="form-control"
+            >
+              <option value="upload_time">Upload Time</option>
+              <option value="level_id">Level ID</option>
+              <option value="level_name">Level Name</option>
+              <option value="creator_name">Creator Name</option>
+              <option value="username">Uploader</option>
+              <option value="stars">Stars</option>
+              <option value="rating">Rating</option>
+            </select>
+          </div>
+          <div class="filter-item">
+            <label for="sortDir">Direction:</label>
+            <select
+                id="sortDir"
+                v-model="sortDir"
+                class="form-control"
+            >
+              <option value="asc">Ascending</option>
+              <option value="desc">Descending</option>
+            </select>
+          </div>
+          <div class="filter-item">
             <label for="itemsPerPage">Items per page:</label>
             <select
                 id="itemsPerPage"
@@ -576,6 +635,16 @@ function roleIcon(role: string) {
             />
           </div>
           <div class="filter-item">
+            <label for="filterSearch">Level / creator:</label>
+            <input
+                id="filterSearch"
+                type="text"
+                v-model="filterSearch"
+                class="form-control"
+                placeholder="Search level or creator"
+            />
+          </div>
+          <div class="filter-item">
             <label for="filterLevelId">Level ID:</label>
             <input
                 id="filterLevelId"
@@ -588,6 +657,20 @@ function roleIcon(role: string) {
                 placeholder="Search by level ID"
             />
           </div>
+          <label class="filter-item toggle-label">
+            <span>Rated levels only</span>
+            <span class="toggle-switch">
+              <input v-model="filterRatedOnly" type="checkbox" />
+              <span class="toggle-track" aria-hidden="true"></span>
+            </span>
+          </label>
+          <label class="filter-item toggle-label">
+            <span>Thumbnails from creator</span>
+            <span class="toggle-switch">
+              <input v-model="filterFromCreatorOnly" type="checkbox" />
+              <span class="toggle-track" aria-hidden="true"></span>
+            </span>
+          </label>
         </div>
 
         <div v-if="totalPages > 1" class="pagination-container">
@@ -886,6 +969,74 @@ textarea.form-control {
   font-weight: 500;
   font-size: 0.88rem;
   color: rgba(255, 255, 255, 0.82);
+}
+
+.toggle-label {
+  justify-content: flex-start;
+  gap: 10px;
+}
+
+.toggle-label > span:first-child {
+  font-weight: 500;
+  font-size: 0.88rem;
+  color: rgba(255, 255, 255, 0.82);
+}
+
+.toggle-switch {
+  position: relative;
+  display: inline-flex;
+  align-items: center;
+  flex-shrink: 0;
+  margin-left: 2px;
+}
+
+.toggle-switch input {
+  position: absolute;
+  opacity: 0;
+  width: 1px;
+  height: 1px;
+  margin: 0;
+  pointer-events: none;
+}
+
+.toggle-track {
+  position: relative;
+  width: 46px;
+  height: 26px;
+  border-radius: 999px;
+  background: rgba(255, 255, 255, 0.16);
+  border: 1px solid rgba(255, 255, 255, 0.14);
+  box-shadow: inset 0 1px 2px rgba(0, 0, 0, 0.2);
+  transition: background 0.18s ease, border-color 0.18s ease, box-shadow 0.18s ease;
+}
+
+.toggle-track::after {
+  content: '';
+  position: absolute;
+  top: 50%;
+  left: 3px;
+  width: 20px;
+  height: 20px;
+  border-radius: 50%;
+  background: #fff;
+  transform: translateY(-50%);
+  box-shadow: 0 2px 6px rgba(0, 0, 0, 0.28);
+  transition: transform 0.18s ease, background 0.18s ease;
+}
+
+.toggle-switch input:checked + .toggle-track {
+  background: rgba(78, 159, 255, 0.35);
+  border-color: rgba(78, 159, 255, 0.75);
+  box-shadow: inset 0 1px 2px rgba(0, 0, 0, 0.18), 0 0 0 3px rgba(78, 159, 255, 0.1);
+}
+
+.toggle-switch input:checked + .toggle-track::after {
+  transform: translate(20px, -50%);
+}
+
+.toggle-switch input:focus-visible + .toggle-track {
+  outline: none;
+  box-shadow: inset 0 1px 2px rgba(0, 0, 0, 0.18), 0 0 0 3px rgba(78, 159, 255, 0.22);
 }
 
 .filter-results {

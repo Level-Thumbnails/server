@@ -6,11 +6,11 @@ use axum::body::Bytes;
 use axum::extract::{Path, Query, State};
 use axum::http::{HeaderMap, StatusCode, header};
 use axum::response::Response;
+use db::NoteData;
 use serde::{Deserialize, Serialize};
 use serde_json::json;
 use std::cmp::PartialEq;
 use webp::Encoder;
-use db::NoteData;
 
 const IMAGE_WIDTH: u32 = 1920;
 const IMAGE_HEIGHT: u32 = 1080;
@@ -52,10 +52,7 @@ async fn authenticate_moderator(
     Ok(user)
 }
 
-async fn authenticate_admin(
-    headers: &HeaderMap,
-    db: &db::AppState,
-) -> Result<db::User, Response> {
+async fn authenticate_admin(headers: &HeaderMap, db: &db::AppState) -> Result<db::User, Response> {
     let user = util::auth_middleware(headers, db).await?;
 
     if !user.role.can_manage_level_locks() {
@@ -91,7 +88,8 @@ async fn force_save(
     user: &db::User,
     db: &db::AppState,
 ) -> Result<(), String> {
-    let upload_id = db.add_upload(id as i64, user.id, "", true, submission_note)
+    let upload_id = db
+        .add_upload(id as i64, user.id, "", true, submission_note)
         .await
         .map_err(|e| format!("Failed to add upload entry: {}", e))?;
 
@@ -144,7 +142,7 @@ async fn add_to_pending(
                 StatusCode::ACCEPTED,
                 &format!("Image for level ID {} is now pending", id),
             )
-        },
+        }
         Err(e) => util::str_response(
             StatusCode::INTERNAL_SERVER_ERROR,
             &format!("Failed to add pending upload entry: {}", e),
@@ -226,7 +224,7 @@ pub async fn upload(
             );
         }
     };
-    
+
     let Some(value) = headers.get(SUBMISSION_NOTE_HEADER) else {
         return util::str_response(StatusCode::BAD_REQUEST, "Missing submission note header");
     };
@@ -315,6 +313,11 @@ pub struct PendingQueryParams {
     level_id: Option<i64>,
     user_id: Option<i64>,
     username: Option<String>,
+    search: Option<String>,
+    rated_only: bool,
+    from_creator_only: bool,
+    sort_by: Option<db::PendingUploadSortBy>,
+    sort_dir: Option<db::SortDirection>,
 }
 
 impl Default for PendingQueryParams {
@@ -327,6 +330,11 @@ impl Default for PendingQueryParams {
             level_id: None,
             user_id: None,
             username: None,
+            search: None,
+            rated_only: false,
+            from_creator_only: false,
+            sort_by: None,
+            sort_dir: None,
         }
     }
 }
@@ -395,8 +403,13 @@ async fn get_pending_uploads(
         level_id: sanitized_query.level_id,
         user_id: sanitized_query.user_id,
         username: sanitized_query.username.clone(),
+        search: sanitized_query.search.clone(),
+        rated_only: sanitized_query.rated_only,
+        from_creator_only: sanitized_query.from_creator_only,
         replacement_only: sanitized_query.replacement_only,
         new_only: sanitized_query.new_only,
+        sort_by: sanitized_query.sort_by.unwrap_or(db::PendingUploadSortBy::UploadTime),
+        sort_dir: sanitized_query.sort_dir.unwrap_or(db::SortDirection::Asc),
     };
 
     match db.get_pending_uploads_paginated(options).await {
@@ -470,7 +483,7 @@ pub async fn get_pending_info(
                 .header(header::CONTENT_TYPE, "application/json")
                 .body(serde_json::to_string(&upload).unwrap().into())
                 .unwrap()
-        },
+        }
         Err(e) => util::str_response(
             StatusCode::NOT_FOUND,
             &format!("No pending upload found with ID {}: {}", id, e),
@@ -514,10 +527,7 @@ pub async fn pending_action(
     };
 
     if upload.accepted_time.is_some() {
-        return util::str_response(
-            StatusCode::CONFLICT,
-            "This upload has already been reviewed"
-        );
+        return util::str_response(StatusCode::CONFLICT, "This upload has already been reviewed");
     }
 
     if action.accepted {
@@ -842,10 +852,7 @@ pub struct AllLevelLocksResponse {
         ),
     )
 )]
-pub async fn get_all_level_locks(
-    headers: HeaderMap,
-    State(db): State<db::AppState>,
-) -> Response {
+pub async fn get_all_level_locks(headers: HeaderMap, State(db): State<db::AppState>) -> Response {
     if let Err(response) = authenticate_admin(&headers, &db).await {
         return response;
     }
