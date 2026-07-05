@@ -84,6 +84,17 @@ export interface PendingItem {
   note_data: NoteData | null;
 }
 
+export interface OriginalThumbnailInfo {
+  level_id: number;
+  account_id: number;
+  username: string;
+  upload_time: string;
+  first_upload_time: string;
+  accepted_time: string | null;
+  accepted_by: number | null;
+  accepted_by_username: string | null;
+}
+
 export interface PendingResponse {
   uploads: PendingItem[];
   page: number;

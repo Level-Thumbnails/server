@@ -3,7 +3,7 @@ import {ref, onMounted, watch, computed, onBeforeUnmount} from "vue";
 import LoadingCircle from "../../components/LoadingCircle.vue";
 import ImageDiffer from "../../components/ImageDiffer.vue";
 import DifficultyFace from "../../components/DifficultyFace.vue";
-import type { PendingItem, PendingResponse } from "../../lib/types";
+import type { PendingItem, PendingResponse, OriginalThumbnailInfo } from "../../lib/types";
 import { fetchJson } from "../../lib/utils";
 import {alertModal, confirmModal} from "../../lib/modals";
 import SettingsManager from "../../managers/settings.ts";
@@ -34,6 +34,9 @@ const totalItems = ref(0);
 
 const selectedItemFromDirectLink = ref(false);
 const directLinkLoading = ref(false);
+
+const originalThumbnailInfo = ref<OriginalThumbnailInfo | null>(null);
+const originalThumbnailLoading = ref(false);
 
 const rejectReasonField = ref<HTMLInputElement | null>(null);
 const rejectReason = ref<string>("");
@@ -100,6 +103,7 @@ async function openPendingItemById(id: number, fromDirectLink = false) {
   }
 
   error.value = null;
+  originalThumbnailInfo.value = null;
 
   try {
     const existingItem = pendingItems.value.find(item => item.id === id);
@@ -118,6 +122,17 @@ async function openPendingItemById(id: number, fromDirectLink = false) {
     if (fromDirectLink) {
       directLinkLoading.value = false;
     }
+  }
+}
+
+async function fetchOriginalThumbnailInfo(levelId: number) {
+  originalThumbnailLoading.value = true;
+  try {
+    originalThumbnailInfo.value = await fetchJson<OriginalThumbnailInfo>(`/thumbnail/${levelId}/info`);
+  } catch (err) {
+    originalThumbnailInfo.value = null;
+  } finally {
+    originalThumbnailLoading.value = false;
   }
 }
 
@@ -170,6 +185,11 @@ watch(currentPage, () => {
 
 watch(selectedItem, () => {
   rejectReason.value = "";
+  originalThumbnailInfo.value = null;
+
+  if (selectedItem.value?.replacement) {
+    fetchOriginalThumbnailInfo(selectedItem.value.level_id);
+  }
 });
 
 watch(selectedItem, (newItem) => {
@@ -389,6 +409,19 @@ function roleIcon(role: string) {
   }
 }
 
+function formatModPlatform(platform: string | null, version: string | null): string {
+  if (!platform || !version) return 'N/A';
+  const platformMap: Record<string, string> = {
+    'Windows': 'Windows',
+    'Android64': 'Android',
+    'Android32': 'Android 32-bit',
+    'MacArm': 'macOS',
+    'MacIntel': 'macOS Intel',
+    'iOS': 'iOS'
+  };
+  return `${version} (${platformMap[platform] || platform})`;
+}
+
 </script>
 
 <template>
@@ -401,8 +434,22 @@ function roleIcon(role: string) {
       <p>{{ error }}</p>
     </div>
     <div v-if="selectedItem" class="selected-item page-transition">
-      <div class="d-flex w-100 justify-content-between align-items-center mb-1">
+      <div class="d-flex w-100 justify-content-between align-items-center mb-1 flex-wrap gap-1">
         <button @click="closeItem()" class="btn btn-dark">&larr; Back To List</button>
+
+        <div v-if="selectedItem!.replacement && originalThumbnailInfo" class="card">
+          <span class="card-subtitle">Original By</span>
+          <p class="card-text">
+            <img src="/icons/user.svg" alt="Original Author" class="user-icon" />
+            <span :title="`Account ID: ${originalThumbnailInfo.account_id}`">{{ originalThumbnailInfo.username }}</span>
+            <img src="/icons/verified.svg" alt="Creator Badge" style="margin-left: 4px;" v-if="originalThumbnailInfo.account_id && selectedItem!.note_data?.creator_id === originalThumbnailInfo.account_id" />
+          </p>
+        </div>
+        <div v-else-if="selectedItem!.replacement && originalThumbnailLoading" class="card">
+          <span class="card-subtitle">Original By</span>
+          <p class="card-text">Loading...</p>
+        </div>
+
         <div class="card">
           <span class="card-subtitle">Submitted By</span>
           <p class="card-text">
@@ -505,6 +552,16 @@ function roleIcon(role: string) {
               </span>
               <span class="stat-row-value">
                 {{ selectedItem!.note_data.percentage.toFixed(2) }}%
+              </span>
+            </p>
+
+            <p class="card-stat-row" v-if="selectedItem!.note_data?.mod_platform && selectedItem!.note_data?.mod_version">
+              <span class="stat-row-label">
+                <img src="/icons/gear.svg" alt="Platform Icon" />
+                Mod Version
+              </span>
+              <span class="stat-row-value">
+                {{ formatModPlatform(selectedItem!.note_data.mod_platform, selectedItem!.note_data.mod_version) }}
               </span>
             </p>
           </p>
