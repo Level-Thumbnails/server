@@ -2,6 +2,8 @@
 /thumbnails
 /uploads
 /dist
+/frontend
+/website
 /.idea
 /.vscode
 /.DS_Store
