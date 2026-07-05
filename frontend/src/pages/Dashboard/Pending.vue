@@ -442,7 +442,7 @@ function formatModPlatform(platform: string | null, version: string | null): str
           <p class="card-text">
             <img src="/icons/user.svg" alt="Original Author" class="user-icon" />
             <span :title="`Account ID: ${originalThumbnailInfo.account_id}`">{{ originalThumbnailInfo.username }}</span>
-            <img src="/icons/verified.svg" alt="Creator Badge" style="margin-left: 4px;" v-if="originalThumbnailInfo.account_id && selectedItem!.note_data?.creator_id === originalThumbnailInfo.account_id" />
+            <img src="/icons/verified.svg" alt="Creator Badge" class="user-icon" style="margin-left: 4px;" v-if="originalThumbnailInfo.account_id && selectedItem!.note_data?.creator_id === originalThumbnailInfo.account_id" />
           </p>
         </div>
         <div v-else-if="selectedItem!.replacement && originalThumbnailLoading" class="card">
@@ -455,8 +455,8 @@ function formatModPlatform(platform: string | null, version: string | null): str
           <p class="card-text">
             <img :src="roleIcon(selectedItem!.user_role)" :alt="selectedItem!.user_role" class="user-icon" />
             <span :title="`User ID: ${selectedItem!.user_id}`">{{ selectedItem!.username }}</span>
-            <img src="/icons/verified.svg" alt="Creator Badge" style="margin-left: 4px;" v-if="selectedItem!.account_id && selectedItem!.note_data?.creator_id === selectedItem!.account_id" />
-            <span v-if="selectedItem!.replacement" class="subtitle">&bullet; Replacement</span>
+            <img src="/icons/verified.svg" alt="Creator Badge" class="user-icon" style="margin-left: 4px;" v-if="selectedItem!.account_id && selectedItem!.note_data?.creator_id === selectedItem!.account_id" />
+            <span v-if="selectedItem!.replacement" class="subtitle user-icon">&bullet; Replacement</span>
           </p>
         </div>
       </div>
