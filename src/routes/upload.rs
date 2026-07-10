@@ -439,12 +439,26 @@ async fn get_pending_uploads(
 }
 
 pub async fn get_pending_uploads_for_level(
-    headers: HeaderMap,
     State(db): State<db::AppState>,
-    Path(id): Path<i64>,
-    Query(params): Query<PendingQueryParams>,
+    Path(id): Path<i64>
 ) -> Response {
-    get_pending_uploads(headers, &db, PendingFilter::ByLevel(id), params).await
+    match db.get_pending_count_for_level(id).await {
+        Ok(count) => {
+            util::response(
+                StatusCode::OK,
+                json!({
+                    "status": 200,
+                    "count": count
+                }),
+            )
+        }
+        Err(e) => {
+            util::str_response(
+                StatusCode::INTERNAL_SERVER_ERROR,
+                &format!("Error fetching pending upload count for level {}: {}", id, e),
+            )
+        }
+    }
 }
 
 pub async fn get_all_pending_uploads(

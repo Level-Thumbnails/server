@@ -1229,4 +1229,13 @@ impl AppState {
             .fetch_one(&*self.pool)
             .await
     }
+
+    pub async fn get_pending_count_for_level(&self, level_id: i64) -> Result<i64, sqlx::Error> {
+        sqlx::query_scalar(
+            "SELECT COUNT(*) FROM uploads WHERE level_id = $1 AND accepted = FALSE AND accepted_time IS NULL",
+        )
+        .bind(level_id)
+        .fetch_one(&*self.pool)
+        .await
+    }
 }
