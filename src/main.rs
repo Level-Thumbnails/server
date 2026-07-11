@@ -212,6 +212,25 @@ async fn get_dir_stats(path: &Path) -> Result<(u64, usize), std::io::Error> {
     Ok((total_size, file_count))
 }
 
+async fn get_dir_total_size_recursive(path: &Path) -> Result<u64, std::io::Error> {
+    let mut total_size = 0;
+    let mut dirs = vec![path.to_path_buf()];
+
+    while let Some(dir) = dirs.pop() {
+        let mut entries = tokio::fs::read_dir(&dir).await?;
+        while let Some(entry) = entries.next_entry().await? {
+            let metadata = entry.metadata().await?;
+            if metadata.is_file() {
+                total_size += metadata.len();
+            } else if metadata.is_dir() {
+                dirs.push(entry.path());
+            }
+        }
+    }
+
+    Ok(total_size)
+}
+
 
 async fn stats_snapshot_loop(db: db::AppState) {
     let interval_minutes = dotenv::var("STATS_SNAPSHOT_INTERVAL_MINUTES")
@@ -232,9 +251,13 @@ async fn stats_snapshot_loop(db: db::AppState) {
 }
 
 async fn create_stats_snapshot(db: &db::AppState) -> Result<(), String> {
-    let (storage_size, thumbnails_count) = get_dir_stats(Path::new("thumbnails"))
+    let storage_size = get_dir_total_size_recursive(Path::new("uploads"))
         .await
-        .map_err(|e| format!("Failed to collect thumbnail storage stats: {}", e))?;
+        .map_err(|e| format!("Failed to collect upload storage stats: {}", e))?;
+
+    let (_, thumbnails_count) = get_dir_stats(Path::new("thumbnails"))
+        .await
+        .map_err(|e| format!("Failed to collect thumbnail count stats: {}", e))?;
 
     let users_per_month = cache_controller::get_user_stats().await.ok().map(|value| value as i64);
 
