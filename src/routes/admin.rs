@@ -1,11 +1,11 @@
+use crate::routes::thumbnail;
+use crate::util::VersionInfo;
 use crate::{cache_controller, db, util};
 use axum::Json;
 use axum::extract::{Path, Query, State};
 use axum::http::{HeaderMap, StatusCode};
 use axum::response::Response;
 use serde::Deserialize;
-use crate::routes::thumbnail;
-use crate::util::VersionInfo;
 
 const DEFAULT_ADMIN_USER_PAGE_SIZE: u32 = 50;
 const MAX_ADMIN_USER_PAGE_SIZE: u32 = 100;
@@ -26,16 +26,16 @@ pub async fn admin_middleware(
     }
 }
 
-pub async fn mod_middleware(
-    headers: &HeaderMap,
-    db: &db::AppState,
-) -> Result<db::User, Response> {
+pub async fn mod_middleware(headers: &HeaderMap, db: &db::AppState) -> Result<db::User, Response> {
     match util::auth_middleware(headers, db).await {
         Ok(user) => {
             if user.role.can_moderate_pending_uploads() {
                 Ok(user)
             } else {
-                Err(util::str_response(StatusCode::FORBIDDEN, "Moderator, Admin, or Owner privileges required"))
+                Err(util::str_response(
+                    StatusCode::FORBIDDEN,
+                    "Moderator, Admin, or Owner privileges required",
+                ))
             }
         }
         Err(resp) => Err(resp),
@@ -68,15 +68,16 @@ pub async fn update_settings(
             {
                 let mut settings = db.settings.write().await;
                 settings.pause_submissions = payload.pause_submissions;
-                settings.min_supported_client = match VersionInfo::from_str(&payload.min_supported_client) {
-                    Some(version) => version,
-                    None => {
-                        return util::str_response(
-                            StatusCode::BAD_REQUEST,
-                            "Invalid version format for min_supported_client",
-                        );
-                    }
-                };
+                settings.min_supported_client =
+                    match VersionInfo::from_str(&payload.min_supported_client) {
+                        Some(version) => version,
+                        None => {
+                            return util::str_response(
+                                StatusCode::BAD_REQUEST,
+                                "Invalid version format for min_supported_client",
+                            );
+                        }
+                    };
             }
 
             match db.save_settings().await {
@@ -185,77 +186,84 @@ pub async fn update_user(
     Json(payload): Json<UpdateUserPayload>,
 ) -> Response {
     match mod_middleware(&headers, &db).await {
-        Ok(current_user) => {
-            match db.get_user_by_id(id).await {
-                Some(target_user) => {
-                    if !current_user.role.can_manage_user(target_user.role) {
-                        return util::str_response(StatusCode::FORBIDDEN, "Insufficient privileges to modify this user");
-                    }
+        Ok(current_user) => match db.get_user_by_id(id).await {
+            Some(target_user) => {
+                if !current_user.role.can_manage_user(target_user.role) {
+                    return util::str_response(
+                        StatusCode::FORBIDDEN,
+                        "Insufficient privileges to modify this user",
+                    );
+                }
 
-                    if let Some(ref new_role) = payload.role {
-                        if !current_user.role.can_assign_role(*new_role) {
-                            return util::str_response(StatusCode::FORBIDDEN, "Insufficient privileges to assign the requested role");
-                        }
-                    }
-
-                    let discord_db: Option<Option<i64>> = match payload.discord_id {
-                        None => None,
-                        Some(None) => Some(None),
-                        Some(Some(DiscordIdRaw::Num(n))) => Some(Some(n)),
-                        Some(Some(DiscordIdRaw::Str(s))) => match s.parse::<i64>() {
-                            Ok(n) => Some(Some(n)),
-                            Err(_) => return util::str_response(StatusCode::BAD_REQUEST, "Invalid discord_id format; must be numeric or stringified number"),
-                        },
-                    };
-
-                    let options = db::UpdateUserOptions {
-                        username: payload.username,
-                        account_id: payload.account_id,
-                        discord_id: discord_db,
-                        role: payload.role,
-                    };
-
-                    match db.update_user(id, options).await {
-                        Ok(_) => {
-                            let query_opts = db::AdminUserQueryOptions {
-                                page: 1,
-                                per_page: 1,
-                                id: Some(id),
-                                username: None,
-                                account_id: None,
-                                discord_id: None,
-                                role: None,
-                                total_uploads: None,
-                                banned: None,
-                                sort_by: db::UserListSortBy::Id,
-                                sort_dir: db::SortDirection::Asc,
-                            };
-
-                            match db.get_admin_users_paginated(query_opts).await {
-                                Ok(page_data) => {
-                                    util::response(
-                                        StatusCode::OK,
-                                        serde_json::json!({
-                                            "status": StatusCode::OK.as_u16(),
-                                            "data": page_data.users.into_iter().next(),
-                                        }),
-                                    )
-                                }
-                                Err(e) => util::str_response(
-                                    StatusCode::INTERNAL_SERVER_ERROR,
-                                    &format!("Failed to fetch updated user: {}", e),
-                                ),
-                            }
-                        }
-                        Err(e) => util::str_response(
-                            StatusCode::INTERNAL_SERVER_ERROR,
-                            &format!("Failed to update user: {}", e),
-                        ),
+                if let Some(ref new_role) = payload.role {
+                    if !current_user.role.can_assign_role(*new_role) {
+                        return util::str_response(
+                            StatusCode::FORBIDDEN,
+                            "Insufficient privileges to assign the requested role",
+                        );
                     }
                 }
-                None => util::str_response(StatusCode::NOT_FOUND, "User not found"),
+
+                let discord_db: Option<Option<i64>> = match payload.discord_id {
+                    None => None,
+                    Some(None) => Some(None),
+                    Some(Some(DiscordIdRaw::Num(n))) => Some(Some(n)),
+                    Some(Some(DiscordIdRaw::Str(s))) => match s.parse::<i64>() {
+                        Ok(n) => Some(Some(n)),
+                        Err(_) => {
+                            return util::str_response(
+                                StatusCode::BAD_REQUEST,
+                                "Invalid discord_id format; must be numeric or stringified number",
+                            );
+                        }
+                    },
+                };
+
+                let options = db::UpdateUserOptions {
+                    username: payload.username,
+                    account_id: payload.account_id,
+                    discord_id: discord_db,
+                    role: payload.role,
+                };
+
+                match db.update_user(id, options).await {
+                    Ok(_) => {
+                        let query_opts = db::AdminUserQueryOptions {
+                            page: 1,
+                            per_page: 1,
+                            id: Some(id),
+                            username: None,
+                            account_id: None,
+                            discord_id: None,
+                            role: None,
+                            total_uploads: None,
+                            banned: None,
+                            sort_by: db::UserListSortBy::Id,
+                            sort_dir: db::SortDirection::Asc,
+                        };
+
+                        match db.get_admin_users_paginated(query_opts).await {
+                            Ok(page_data) => util::response(
+                                StatusCode::OK,
+                                serde_json::json!({
+                                    "status": StatusCode::OK.as_u16(),
+                                    "data": page_data.users.into_iter().next(),
+                                }),
+                            ),
+                            Err(e) => util::str_response(
+                                StatusCode::INTERNAL_SERVER_ERROR,
+                                &format!("Failed to fetch updated user: {}", e),
+                            ),
+                        }
+                    }
+                    Err(e) => util::str_response(
+                        StatusCode::INTERNAL_SERVER_ERROR,
+                        &format!("Failed to update user: {}", e),
+                    ),
+                }
             }
-        }
+            None => util::str_response(StatusCode::NOT_FOUND, "User not found"),
+        },
         Err(resp) => resp,
     }
 }
@@ -266,24 +274,25 @@ pub async fn delete_thumbnail(
     Path(id): Path<i64>,
 ) -> Response {
     match mod_middleware(&headers, &db).await {
-        Ok(_) => {
-            match db.delete_thumbnail_by_id(id).await {
-                Ok(deleted) => {
-                    if deleted {
-                        thumbnail::delete_thumbnail(id).await;
-                        thumbnail::purge_resize_cache(id).await;
-                        cache_controller::purge(id);
-                        util::str_response(StatusCode::OK, "Thumbnail deleted successfully")
-                    } else {
-                        util::str_response(StatusCode::NOT_FOUND, "Thumbnail not found")
+        Ok(_) => match db.delete_thumbnail_by_id(id).await {
+            Ok(deleted) => {
+                if deleted {
+                    thumbnail::delete_thumbnail(id).await;
+                    if let Ok(id) = u64::try_from(id) {
+                        db.remove_active_thumbnail(id).await;
                     }
+                    thumbnail::purge_resize_cache(id).await;
+                    cache_controller::purge(id);
+                    util::str_response(StatusCode::OK, "Thumbnail deleted successfully")
+                } else {
+                    util::str_response(StatusCode::NOT_FOUND, "Thumbnail not found")
                 }
-                Err(e) => util::str_response(
-                    StatusCode::INTERNAL_SERVER_ERROR,
-                    &format!("Failed to delete thumbnail: {}", e),
-                ),
             }
-        }
+            Err(e) => util::str_response(
+                StatusCode::INTERNAL_SERVER_ERROR,
+                &format!("Failed to delete thumbnail: {}", e),
+            ),
+        },
         Err(resp) => resp,
     }
 }
@@ -301,28 +310,33 @@ pub async fn ban_user(
     Json(payload): Json<BanUserPayload>,
 ) -> Response {
     match mod_middleware(&headers, &db).await {
-        Ok(current_user) => {
-            match db.get_user_by_id(id).await {
-                Some(target_user) => {
-                    if !current_user.role.can_manage_user(target_user.role) {
-                        return util::str_response(StatusCode::FORBIDDEN, "Insufficient privileges to ban this user");
-                    }
-
-                    match db.ban_user(
-                        id, payload.reason,
-                        current_user.id,
-                        payload.expires_by.map(|dt| dt.naive_utc())
-                    ).await {
-                        Ok(_) => util::str_response(StatusCode::OK, "User banned successfully"),
-                        Err(e) => util::str_response(
-                            StatusCode::INTERNAL_SERVER_ERROR,
-                            &format!("Failed to ban user: {}", e),
-                        ),
-                    }
+        Ok(current_user) => match db.get_user_by_id(id).await {
+            Some(target_user) => {
+                if !current_user.role.can_manage_user(target_user.role) {
+                    return util::str_response(
+                        StatusCode::FORBIDDEN,
+                        "Insufficient privileges to ban this user",
+                    );
                 }
-                None => util::str_response(StatusCode::NOT_FOUND, "User not found"),
+
+                match db
+                    .ban_user(
+                        id,
+                        payload.reason,
+                        current_user.id,
+                        payload.expires_by.map(|dt| dt.naive_utc()),
+                    )
+                    .await
+                {
+                    Ok(_) => util::str_response(StatusCode::OK, "User banned successfully"),
+                    Err(e) => util::str_response(
+                        StatusCode::INTERNAL_SERVER_ERROR,
+                        &format!("Failed to ban user: {}", e),
+                    ),
+                }
             }
-        }
+            None => util::str_response(StatusCode::NOT_FOUND, "User not found"),
+        },
         Err(resp) => resp,
     }
 }
@@ -333,31 +347,34 @@ pub async fn unban_user(
     Path(id): Path<i64>,
 ) -> Response {
     match mod_middleware(&headers, &db).await {
-        Ok(current_user) => {
-            match db.get_user_by_id(id).await {
-                Some(target_user) => {
-                    if !current_user.role.can_manage_user(target_user.role) {
-                        return util::str_response(StatusCode::FORBIDDEN, "Insufficient privileges to unban this user");
-                    }
-
-                    match db.unban_user(id).await {
-                        Ok(changed) => {
-                            if changed {
-                                util::str_response(StatusCode::OK, "User unbanned successfully")
-                            } else {
-                                util::str_response(StatusCode::NOT_FOUND, "No active ban found for this user")
-                            }
-                        }
-                        Err(e) => util::str_response(
-                            StatusCode::INTERNAL_SERVER_ERROR,
-                            &format!("Failed to unban user: {}", e),
-                        ),
-                    }
+        Ok(current_user) => match db.get_user_by_id(id).await {
+            Some(target_user) => {
+                if !current_user.role.can_manage_user(target_user.role) {
+                    return util::str_response(
+                        StatusCode::FORBIDDEN,
+                        "Insufficient privileges to unban this user",
+                    );
                 }
-                None => util::str_response(StatusCode::NOT_FOUND, "User not found"),
+
+                match db.unban_user(id).await {
+                    Ok(changed) => {
+                        if changed {
+                            util::str_response(StatusCode::OK, "User unbanned successfully")
+                        } else {
+                            util::str_response(
+                                StatusCode::NOT_FOUND,
+                                "No active ban found for this user",
+                            )
+                        }
+                    }
+                    Err(e) => util::str_response(
+                        StatusCode::INTERNAL_SERVER_ERROR,
+                        &format!("Failed to unban user: {}", e),
+                    ),
+                }
             }
-        }
+            None => util::str_response(StatusCode::NOT_FOUND, "User not found"),
+        },
         Err(resp) => resp,
     }
 }
-

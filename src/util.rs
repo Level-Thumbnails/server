@@ -1,10 +1,10 @@
-use std::path::Path;
 use crate::auth::UserSession;
 use crate::db;
 use axum::http::{HeaderMap, StatusCode, header};
 use axum::response::Response;
 use serde::{Deserialize, Serialize};
 use serde_json::json;
+use std::path::Path;
 
 const MAX_SUBMISSION_NOTE_LENGTH: usize = 500;
 
@@ -55,7 +55,10 @@ pub fn parse_submission_note(raw: &str) -> Result<ParsedSubmissionNote, String> 
     }
 
     if trimmed.chars().count() > MAX_SUBMISSION_NOTE_LENGTH {
-        return Err(format!("Submission note is too long (max {} characters)", MAX_SUBMISSION_NOTE_LENGTH));
+        return Err(format!(
+            "Submission note is too long (max {} characters)",
+            MAX_SUBMISSION_NOTE_LENGTH
+        ));
     }
 
     let mut level_name = None;
@@ -166,26 +169,20 @@ fn try_read_cookie(headers: &HeaderMap, cookie_name: &str) -> Option<String> {
     })
 }
 
-async fn session_response(
-    token: &str,
-    db: &db::AppState,
-) -> Result<db::User, Response> {
+async fn session_response(token: &str, db: &db::AppState) -> Result<db::User, Response> {
     match UserSession::from_jwt(token) {
         Ok(session) => match db.get_user_by_id(session.id).await {
             Some(user) => Ok(user),
             None => Err(str_response(
                 StatusCode::from_u16(498).unwrap(), // "Invalid Token"
-                "User not found"
+                "User not found",
             )),
         },
         Err(e) => Err(str_response(StatusCode::UNAUTHORIZED, &e.to_string())),
     }
 }
 
-pub async fn auth_middleware(
-    headers: &HeaderMap,
-    db: &db::AppState,
-) -> Result<db::User, Response> {
+pub async fn auth_middleware(headers: &HeaderMap, db: &db::AppState) -> Result<db::User, Response> {
     match headers.get("Authorization").and_then(|h| h.to_str().ok()) {
         Some(token) => session_response(token, db).await,
         None => {

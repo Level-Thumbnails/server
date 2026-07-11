@@ -104,6 +104,7 @@ async fn force_save(
         .await
         .map_err(|e| format!("Failed to move image to final location: {}", e))?;
 
+    db.add_active_thumbnail(id).await;
     cache_controller::purge(id as i64);
     thumbnail::purge_resize_cache(id as i64).await;
     Ok(())
@@ -440,24 +441,20 @@ async fn get_pending_uploads(
 
 pub async fn get_pending_uploads_for_level(
     State(db): State<db::AppState>,
-    Path(id): Path<i64>
+    Path(id): Path<i64>,
 ) -> Response {
     match db.get_pending_count_for_level(id).await {
-        Ok(count) => {
-            util::response(
-                StatusCode::OK,
-                json!({
-                    "status": 200,
-                    "count": count
-                }),
-            )
-        }
-        Err(e) => {
-            util::str_response(
-                StatusCode::INTERNAL_SERVER_ERROR,
-                &format!("Error fetching pending upload count for level {}: {}", id, e),
-            )
-        }
+        Ok(count) => util::response(
+            StatusCode::OK,
+            json!({
+                "status": 200,
+                "count": count
+            }),
+        ),
+        Err(e) => util::str_response(
+            StatusCode::INTERNAL_SERVER_ERROR,
+            &format!("Error fetching pending upload count for level {}: {}", id, e),
+        ),
     }
 }
 
@@ -563,6 +560,7 @@ pub async fn pending_action(
             );
         }
 
+        db.add_active_thumbnail(upload.level_id as u64).await;
         cache_controller::purge(upload.level_id);
         thumbnail::purge_resize_cache(upload.level_id).await;
         util::str_response(StatusCode::OK, &format!("Upload {} accepted", id))

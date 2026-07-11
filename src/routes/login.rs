@@ -35,10 +35,7 @@ fn handle_verdict_error(verdict: auth::Verdict) -> Response {
     )
 }
 
-pub async fn login(
-    State(db): State<db::AppState>,
-    Json(payload): Json<LoginPayload>,
-) -> Response {
+pub async fn login(State(db): State<db::AppState>, Json(payload): Json<LoginPayload>) -> Response {
     // Validate argon token
     let verdict = match auth::ArgonClient::get()
         .verify(payload.account_id, payload.user_id, &payload.username, &payload.argon_token)

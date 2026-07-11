@@ -35,6 +35,36 @@ fn is_image_uploaded(level_id: i64) -> bool {
     Path::new(&format!("thumbnails/{}.webp", level_id)).exists()
 }
 
+async fn preload_active_thumbnail_ids() -> HashSet<u64> {
+    let mut ids = HashSet::new();
+    let mut entries = match tokio::fs::read_dir("thumbnails").await {
+        Ok(entries) => entries,
+        Err(e) => {
+            warn!("Failed to preload thumbnails directory: {}", e);
+            return ids;
+        }
+    };
+
+    while let Ok(Some(entry)) = entries.next_entry().await {
+        let Ok(file_type) = entry.file_type().await else {
+            continue;
+        };
+        if !file_type.is_file() {
+            continue;
+        }
+
+        let Some(name) = entry.file_name().to_str().map(str::to_owned) else {
+            continue;
+        };
+        let Some(id) = name.strip_suffix(".webp").and_then(|raw| raw.parse::<u64>().ok()) else {
+            continue;
+        };
+        ids.insert(id);
+    }
+
+    ids
+}
+
 async fn migrate_submission_notes_perform(pool: &sqlx::Pool<Postgres>) -> Result<(), sqlx::Error> {
     let mut tx = pool.begin().await?;
 
@@ -239,11 +269,32 @@ impl AppState {
             }
         }
 
+        let active_thumbnails = preload_active_thumbnail_ids().await;
+
         AppState {
             pool: Arc::new(pool),
             settings: Arc::new(RwLock::new(settings)),
             online_moderators: Arc::new(RwLock::new(HashMap::new())),
             registered_users: Arc::new(RwLock::new(set)),
+            active_thumbnails: Arc::new(RwLock::new(active_thumbnails)),
+        }
+    }
+
+    pub async fn add_active_thumbnail(&self, id: u64) {
+        self.active_thumbnails.write().await.insert(id);
+    }
+
+    pub async fn remove_active_thumbnail(&self, id: u64) {
+        self.active_thumbnails.write().await.remove(&id);
+    }
+
+    pub async fn random_active_thumbnail(&self) -> Option<u64> {
+        let ids = self.active_thumbnails.read().await;
+        if ids.is_empty() {
+            None
+        } else {
+            let idx = rand::random::<u64>() as usize % ids.len();
+            ids.iter().nth(idx).copied()
         }
     }
 

@@ -1,3 +1,4 @@
+use crate::util::MessageResponse;
 use crate::{db, util};
 use axum::extract::{Path, State};
 use axum::http::{StatusCode, header};
@@ -7,7 +8,6 @@ use serde::{Deserialize, Serialize};
 use std::path::PathBuf;
 use tracing::warn;
 use webp::Encoder;
-use crate::util::MessageResponse;
 
 const CACHE_DIR: &str = "thumbnails/cache";
 
@@ -82,10 +82,7 @@ fn image_response(image_data: Vec<u8>, id: u64, upload_info: &db::UploadInfo) ->
         .unwrap()
 }
 
-async fn get_upload_info(
-    db: &db::AppState,
-    id: u64,
-) -> Result<db::UploadInfo, Response> {
+async fn get_upload_info(db: &db::AppState, id: u64) -> Result<db::UploadInfo, Response> {
     match db.get_upload_info(id as i64).await {
         Some(upload) => Ok(upload),
         None => Err(util::str_response(StatusCode::NOT_FOUND, "Image not found")),
@@ -294,25 +291,9 @@ pub async fn thumbnail_info_handler(
     }
 }
 
-pub async fn handle_random(res: Res) -> Response {
-    // pick random id from directory
-    // TODO: cache the list of ids in memory to avoid reading the directory every time
-    match tokio::fs::read_dir("thumbnails").await {
-        Ok(mut entries) => {
-            let mut ids: Vec<u64> = Vec::new();
-            while let Some(entry) = entries.next_entry().await.unwrap() {
-                if let Some(name) = entry.file_name().to_str() {
-                    if let Ok(id) = name.trim_end_matches(".webp").parse::<u64>() {
-                        ids.push(id);
-                    }
-                }
-            }
-
-            if ids.is_empty() {
-                return util::str_response(StatusCode::NOT_FOUND, "No images found");
-            }
-
-            let random_id = ids[rand::random::<u64>() as usize % ids.len()];
+pub async fn handle_random(res: Res, db: db::AppState) -> Response {
+    match db.random_active_thumbnail().await {
+        Some(random_id) => {
             let url = format!("/thumbnail/{}/{}", random_id, res.to_string());
             Response::builder()
                 .status(StatusCode::FOUND)
@@ -320,10 +301,7 @@ pub async fn handle_random(res: Res) -> Response {
                 .body("".into())
                 .unwrap()
         }
-        Err(e) => util::str_response(
-            StatusCode::INTERNAL_SERVER_ERROR,
-            &format!("Failed to get thumbnails: {}", e),
-        ),
+        None => util::str_response(StatusCode::NOT_FOUND, "No images found"),
     }
 }
 
@@ -354,8 +332,8 @@ pub async fn handle_random(res: Res) -> Response {
         )
     )
 )]
-pub async fn random_handler() -> Response {
-    handle_random(Res::High).await
+pub async fn random_handler(State(db): State<db::AppState>) -> Response {
+    handle_random(Res::High, db).await
 }
 
 #[utoipa::path(
@@ -388,6 +366,6 @@ pub async fn random_handler() -> Response {
         )
     )
 )]
-pub async fn random_res_handler(Path(res): Path<Res>) -> Response {
-    handle_random(res).await
+pub async fn random_res_handler(Path(res): Path<Res>, State(db): State<db::AppState>) -> Response {
+    handle_random(res, db).await
 }

@@ -2,7 +2,7 @@ use crate::{db, util};
 use axum::extract::{Query, State};
 use axum::http::StatusCode;
 use axum::response::Response;
-use serde::{Serialize, Deserialize};
+use serde::{Deserialize, Serialize};
 use util::MessageResponse;
 
 const ONLINE_MODERATOR_WINDOW_MINUTES: i64 = 5;
@@ -83,7 +83,7 @@ pub async fn get_stats(State(db): State<db::AppState>) -> Response {
             return util::str_response(
                 StatusCode::INTERNAL_SERVER_ERROR,
                 &format!("Failed to fetch stats snapshot: {}", e),
-            )
+            );
         }
     };
 
@@ -93,7 +93,7 @@ pub async fn get_stats(State(db): State<db::AppState>) -> Response {
             return util::str_response(
                 StatusCode::INTERNAL_SERVER_ERROR,
                 &format!("Failed to fetch total level count: {}", e),
-            )
+            );
         }
     };
 
@@ -103,7 +103,7 @@ pub async fn get_stats(State(db): State<db::AppState>) -> Response {
             return util::str_response(
                 StatusCode::INTERNAL_SERVER_ERROR,
                 &format!("Failed to fetch pending upload count: {}", e),
-            )
+            );
         }
     };
 
@@ -125,13 +125,20 @@ pub async fn get_stats(State(db): State<db::AppState>) -> Response {
                 users_per_month: snapshot.as_ref().and_then(|s| s.users_per_month).unwrap_or(0),
                 users_total: snapshot.as_ref().map(|s| s.users_total).unwrap_or(0),
                 uploads_total: snapshot.as_ref().map(|s| s.uploads_total).unwrap_or(0),
-                pending_uploads_total: snapshot.as_ref().map(|s| s.pending_uploads_total).unwrap_or(0),
-                accepted_uploads_total: snapshot.as_ref().map(|s| s.accepted_uploads_total).unwrap_or(0),
+                pending_uploads_total: snapshot
+                    .as_ref()
+                    .map(|s| s.pending_uploads_total)
+                    .unwrap_or(0),
+                accepted_uploads_total: snapshot
+                    .as_ref()
+                    .map(|s| s.accepted_uploads_total)
+                    .unwrap_or(0),
                 total_levels,
                 current_pending_uploads,
                 online_moderators,
-            }
-        }).unwrap()
+            },
+        })
+        .unwrap(),
     )
 }
 
@@ -205,5 +212,3 @@ pub async fn get_stats_history(
         ),
     }
 }
-
-

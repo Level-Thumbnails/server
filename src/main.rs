@@ -1,5 +1,5 @@
 use axum::extract::DefaultBodyLimit;
-use axum::{Router, routing::delete, routing::get, routing::post, routing::patch};
+use axum::{Router, routing::delete, routing::get, routing::patch, routing::post};
 use std::path::Path;
 use tokio::net::TcpListener;
 use tokio::time::{Duration, sleep};
@@ -8,15 +8,15 @@ use tower_http::services::{ServeDir, ServeFile};
 use tracing::{info, warn};
 use tracing_appender::rolling::{RollingFileAppender, Rotation};
 use tracing_subscriber::filter::EnvFilter;
+use utoipa::openapi::security::{ApiKey, ApiKeyValue, HttpAuthScheme, HttpBuilder, SecurityScheme};
 use utoipa::{Modify, OpenApi};
-use utoipa::openapi::security::{HttpAuthScheme, HttpBuilder, SecurityScheme, ApiKey, ApiKeyValue};
 use utoipa_swagger_ui::SwaggerUi;
 
 mod auth;
 mod cache_controller;
+pub mod db;
 mod routes;
 mod util;
-pub mod db;
 
 use routes::{admin, login, stats, thumbnail, upload, user};
 
@@ -39,9 +39,10 @@ impl Modify for SecurityAddon {
 
         components.add_security_scheme(
             "cookieAuth",
-            SecurityScheme::ApiKey(
-                ApiKey::Cookie(ApiKeyValue::with_description("auth_token", "User token passed via auth_token cookie."))
-            ),
+            SecurityScheme::ApiKey(ApiKey::Cookie(ApiKeyValue::with_description(
+                "auth_token",
+                "User token passed via auth_token cookie.",
+            ))),
         );
     }
 }
@@ -230,7 +231,6 @@ async fn get_dir_total_size_recursive(path: &Path) -> Result<u64, std::io::Error
 
     Ok(total_size)
 }
-
 
 async fn stats_snapshot_loop(db: db::AppState) {
     let interval_minutes = dotenv::var("STATS_SNAPSHOT_INTERVAL_MINUTES")
