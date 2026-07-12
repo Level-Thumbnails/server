@@ -66,7 +66,8 @@ impl Modify for SecurityAddon {
         upload::get_all_level_locks,
         upload::get_level_lock,
         upload::lock_level,
-        upload::unlock_level
+        upload::unlock_level,
+        admin::delete_thumbnail
     ),
     components(
         schemas(
@@ -93,7 +94,8 @@ impl Modify for SecurityAddon {
     tags(
         (name = "Server Status", description = "Fetching overall server statistics."),
         (name = "Thumbnails", description = "Fetching thumbnail images and metadata."),
-        (name = "Level Locking", description = "Locking and unlocking levels for thumbnail uploads.")
+        (name = "Level Locking", description = "Locking and unlocking levels for thumbnail uploads."),
+        (name = "Admin", description = "Miscellaneous moderation endpoints.")
     )
 )]
 struct ApiDoc;
