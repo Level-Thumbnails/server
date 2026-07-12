@@ -1,5 +1,5 @@
 use crate::routes::thumbnail;
-use crate::util::VersionInfo;
+use crate::util::{MessageResponse, VersionInfo};
 use crate::{cache_controller, db, util};
 use axum::Json;
 use axum::extract::{Path, Query, State};
