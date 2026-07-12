@@ -268,6 +268,54 @@ pub async fn update_user(
     }
 }
 
+#[utoipa::path(
+    delete,
+    path = "/admin/thumbnail/{id}",
+    description = "Deletes the current active thumbnail from a specified level.",
+    tag = "Admin",
+    security(("bearerAuth" = []), ("cookieAuth" = [])),
+    params(
+        ("id" = u64, Path, description = "Geometry Dash level ID")
+    ),
+    responses(
+        (
+            status = 200,
+            description = "Successfully deleted the thumbnail",
+            body = MessageResponse,
+            example = json!({"status": 200, "message": "Thumbnail deleted successfully"})
+        ),
+        (
+            status = 401,
+            description = "Missing or invalid authentication",
+            body = MessageResponse,
+            example = json!({"status": 401, "message": "Missing Authorization header"})
+        ),
+        (
+            status = 403,
+            description = "Admin or Owner privileges required",
+            body = MessageResponse,
+            example = json!({"status": 403, "message": "Moderator, Admin or Owner privileges required"})
+        ),
+        (
+            status = 404,
+            description = "Thumbnail not found",
+            body = MessageResponse,
+            example = json!({"status": 404, "message": "Thumbnail not found"})
+        ),
+        (
+            status = 498,
+            description = "Invalid token (user not found)",
+            body = MessageResponse,
+            example = json!({"status": 498, "message": "User not found"})
+        ),
+        (
+            status = 500,
+            description = "Internal server error",
+            body = MessageResponse,
+            example = json!({"status": 500, "message": "Failed to delete thumbnail: database error"})
+        ),
+    )
+)]
 pub async fn delete_thumbnail(
     headers: HeaderMap,
     State(db): State<db::AppState>,
