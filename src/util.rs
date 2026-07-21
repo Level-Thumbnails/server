@@ -42,6 +42,45 @@ pub struct ParsedSubmissionNote {
     pub message: Option<String>,
 }
 
+impl ParsedSubmissionNote {
+    pub fn sanitize_level_data(&mut self) {
+        // any negative value indicates tampering -> full reset
+        if self.stars < 0 || self.rating < 0 || self.difficulty < 0 {
+            self.stars = 0;
+            self.rating = 0;
+            self.difficulty = 0;
+            return;
+        }
+
+        // unrated levels can't have rating and are only allowed to be NA or between Easy and Insane
+        if self.stars == 0 {
+            self.rating = 0;
+            if self.difficulty == 1 || self.difficulty >= 7 {
+                self.difficulty = 0;
+            }
+            return;
+        }
+
+        // verify stars match difficulty
+        let is_valid = match (self.stars, self.difficulty) {
+            (1, 1) => true,       // Auto
+            (2, 2) => true,       // Easy
+            (3, 3) => true,       // Normal
+            (4 | 5, 4) => true,   // Hard
+            (6 | 7, 5) => true,   // Harder
+            (8 | 9, 6) => true,   // Insane
+            (10, 7..=11) => true, // Demons
+            _ => false,
+        };
+
+        if !is_valid {
+            self.stars = 0;
+            self.rating = 0;
+            self.difficulty = 0;
+        }
+    }
+}
+
 fn decode_submission_value(value: &str) -> Result<String, String> {
     urlencoding::decode(value)
         .map(|value| value.into_owned())
@@ -66,10 +105,10 @@ pub fn parse_submission_note(raw: &str) -> Result<ParsedSubmissionNote, String> 
     let mut creator_name = None;
     let mut downloads = None;
     let mut likes = None;
-    let mut stars = None;
+    let mut stars: Option<i64> = None;
     let mut length = None;
-    let mut rating = None;
-    let mut difficulty = None;
+    let mut rating: Option<i8> = None;
+    let mut difficulty: Option<i8> = None;
     let mut percentage: Option<f32> = None;
     let mut attempt_time: Option<f64> = None;
     let mut message = None;
@@ -80,18 +119,12 @@ pub fn parse_submission_note(raw: &str) -> Result<ParsedSubmissionNote, String> 
         let value = kv.next().unwrap_or("");
 
         match key {
-            "v" => {
-                if value != "1" {
-                    return Err("Unsupported submission note version".to_string());
-                }
+            "v" if value != "1" => {
+                return Err("Unsupported submission note version".to_string());
             }
-            "ln" if level_name.is_none() => {
-                level_name = Some(decode_submission_value(value)?);
-            }
+            "ln" if level_name.is_none() => level_name = Some(decode_submission_value(value)?),
             "ci" if creator_id.is_none() => creator_id = value.parse().ok(),
-            "cn" if creator_name.is_none() => {
-                creator_name = Some(decode_submission_value(value)?);
-            }
+            "cn" if creator_name.is_none() => creator_name = Some(decode_submission_value(value)?),
             "dw" if downloads.is_none() => downloads = value.parse().ok(),
             "lk" if likes.is_none() => likes = value.parse().ok(),
             "ls" if stars.is_none() => stars = value.parse().ok(),
@@ -105,43 +138,63 @@ pub fn parse_submission_note(raw: &str) -> Result<ParsedSubmissionNote, String> 
         }
     }
 
-    if level_name.is_none()
-        || creator_id.is_none()
-        || creator_name.is_none()
-        || downloads.is_none()
-        || likes.is_none()
-        || stars.is_none()
-        // || length.is_none() // length can be sometimes missing
-        || rating.is_none()
-        || difficulty.is_none()
-        || percentage.is_none()
-        || attempt_time.is_none()
-    {
+    let (
+        Some(level_name),
+        Some(creator_id),
+        Some(creator_name),
+        Some(downloads),
+        Some(likes),
+        Some(stars),
+        Some(rating),
+        Some(difficulty),
+        Some(percentage),
+        Some(attempt_time),
+    ) = (
+        level_name,
+        creator_id,
+        creator_name,
+        downloads,
+        likes,
+        stars,
+        rating,
+        difficulty,
+        percentage,
+        attempt_time,
+    )
+    else {
         return Err("Missing required fields in submission note".to_string());
-    }
+    };
 
-    if !percentage.unwrap_or_default().is_finite() {
-        percentage = Some(-1.0);
-    }
+    let percentage = if percentage.is_finite() && (0.0..=100.0).contains(&percentage) {
+        percentage
+    } else {
+        -1.0
+    };
 
-    if !attempt_time.unwrap_or_default().is_finite() {
-        attempt_time = Some(-1.0);
-    }
+    let attempt_time = if attempt_time.is_finite() && attempt_time >= 0.0 {
+        attempt_time
+    } else {
+        -1.0
+    };
 
-    Ok(ParsedSubmissionNote {
-        level_name: level_name.unwrap_or_default(),
-        creator_id: creator_id.unwrap_or_default(),
-        creator_name: creator_name.unwrap_or_default(),
-        downloads: downloads.unwrap_or_default(),
-        likes: likes.unwrap_or_default(),
-        stars: stars.unwrap_or_default(),
+    let mut note = ParsedSubmissionNote {
+        level_name,
+        creator_id,
+        creator_name,
+        downloads,
+        likes,
+        stars,
         length: length.unwrap_or_default(),
-        rating: rating.unwrap_or_default(),
-        difficulty: difficulty.unwrap_or_default(),
-        percentage: percentage.unwrap_or_default(),
-        attempt_time: attempt_time.unwrap_or_default(),
+        rating,
+        difficulty,
+        percentage,
+        attempt_time,
         message,
-    })
+    };
+
+    note.sanitize_level_data();
+
+    Ok(note)
 }
 
 pub fn str_response(status: StatusCode, message: &str) -> Response {
