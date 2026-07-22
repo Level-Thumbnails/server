@@ -1,7 +1,7 @@
 use crate::routes::thumbnail;
 use crate::util::MessageResponse;
 use crate::{cache_controller, db, util};
-use crate::webhooks::{SystemNotification, WebhookClient};
+use crate::webhooks::{SystemNotification, ThumbnailNotification, WebhookClient};
 use axum::Json;
 use axum::body::Bytes;
 use axum::extract::{Path, Query, State};
@@ -12,6 +12,7 @@ use serde::{Deserialize, Serialize};
 use serde_json::json;
 use std::cmp::PartialEq;
 use webp::Encoder;
+use crate::db::{AppState, User};
 
 const IMAGE_WIDTH: u32 = 1920;
 const IMAGE_HEIGHT: u32 = 1080;
@@ -88,9 +89,16 @@ async fn force_save(
     submission_note: NoteData,
     user: &db::User,
     db: &db::AppState,
+    replacement: bool,
 ) -> Result<(), String> {
+    let original_upload_id = if replacement {
+        db.get_upload_info(id as i64).await.map_or_else(|| 0, |i| i.upload_id)
+    } else {
+        0
+    };
+
     let upload_id = db
-        .add_upload(id as i64, user.id, "", true, submission_note)
+        .add_upload(id as i64, user.id, "", true, submission_note.clone())
         .await
         .map_err(|e| format!("Failed to add upload entry: {}", e))?;
 
@@ -108,6 +116,40 @@ async fn force_save(
     db.add_active_thumbnail(id).await;
     cache_controller::purge(id as i64);
     thumbnail::purge_resize_cache(id as i64).await;
+
+    let _ = if replacement {
+        WebhookClient::get().send_thumb_notification(ThumbnailNotification::Replacement {
+            level_name: &submission_note.level_name,
+            level_creator: &submission_note.creator_name,
+            level_id: id as i64,
+            difficulty: submission_note.difficulty,
+            rating: submission_note.rating,
+            upload_id,
+            old_upload_id: original_upload_id,
+            created_by: &user.username,
+            created_by_role: user.role,
+            created_by_discord: user.discord_id,
+            accepted_by: &user.username,
+            accepted_by_role: user.role,
+            accepted_by_discord: user.discord_id,
+        }).await
+    } else {
+        WebhookClient::get().send_thumb_notification(ThumbnailNotification::NewUpload {
+            level_name: &submission_note.level_name,
+            level_creator: &submission_note.creator_name,
+            level_id: id as i64,
+            difficulty: submission_note.difficulty,
+            rating: submission_note.rating,
+            upload_id,
+            created_by: &user.username,
+            created_by_role: user.role,
+            created_by_discord: user.discord_id,
+            accepted_by: &user.username,
+            accepted_by_role: user.role,
+            accepted_by_discord: user.discord_id,
+        }).await
+    };
+
     Ok(())
 }
 
@@ -266,28 +308,10 @@ pub async fn upload(
     };
 
     if user.role.can_upload_replacement_directly() {
-        match force_save(id, &webp_data, note, &user, &db).await {
-            Ok(_) => util::str_response(
-                StatusCode::CREATED,
-                &format!("Image for level ID {} uploaded", id),
-            ),
-            Err(e) => util::str_response(
-                StatusCode::INTERNAL_SERVER_ERROR,
-                &format!("Error saving image: {}", e),
-            ),
-        }
+        handle_force_save(&db, id, &user, note, &webp_data, is_image_uploaded(id).await).await
     } else if user.role.can_upload_new_thumbnail_directly() {
         if !is_image_uploaded(id).await {
-            match force_save(id, &webp_data, note, &user, &db).await {
-                Ok(_) => util::str_response(
-                    StatusCode::CREATED,
-                    &format!("Image for level ID {} uploaded", id),
-                ),
-                Err(e) => util::str_response(
-                    StatusCode::INTERNAL_SERVER_ERROR,
-                    &format!("Error saving image: {}", e),
-                ),
-            }
+            handle_force_save(&db, id, &user, note, &webp_data, false).await
         } else {
             // Image exists, add to pending for approval
             add_to_pending(id, &webp_data, note, &user, &db).await
@@ -295,6 +319,23 @@ pub async fn upload(
     } else {
         // Regular users must go through approval process
         add_to_pending(id, &webp_data, note, &user, &db).await
+    }
+}
+
+async fn handle_force_save(db: &AppState, id: u64, user: &User, note: NoteData, webp_data: &Vec<u8>, replacement: bool) -> Response {
+    match force_save(id, &webp_data, note, &user, &db, replacement).await {
+        Ok(_) => util::str_response(
+            StatusCode::CREATED,
+            &format!("Image for level ID {} {}", id, if replacement{
+                "replaced"
+            } else {
+                "uploaded"
+            }),
+        ),
+        Err(e) => util::str_response(
+            StatusCode::INTERNAL_SERVER_ERROR,
+            &format!("Error saving image: {}", e),
+        ),
     }
 }
 
@@ -542,6 +583,13 @@ pub async fn pending_action(
         // Accept: hard link the image to the new location
         let new_image_path = format!("thumbnails/{}.webp", upload.level_id);
 
+        let is_replacement = is_image_uploaded(upload.level_id as u64).await;
+        let original_upload_id = if is_replacement {
+            db.get_upload_info(upload.level_id).await.map_or_else(|| 0, |i| i.upload_id)
+        } else {
+            0
+        };
+
         let _ = tokio::fs::remove_file(&new_image_path).await;
         if let Err(e) = tokio::fs::hard_link(&old_image_path, &new_image_path).await {
             return util::str_response(
@@ -560,6 +608,42 @@ pub async fn pending_action(
         db.add_active_thumbnail(upload.level_id as u64).await;
         cache_controller::purge(upload.level_id);
         thumbnail::purge_resize_cache(upload.level_id).await;
+
+        if let Some(notes) = upload.note_data {
+            let _ = if is_replacement {
+                WebhookClient::get().send_thumb_notification(ThumbnailNotification::Replacement {
+                    level_name: &notes.level_name,
+                    level_creator: &notes.creator_name,
+                    level_id: upload.level_id,
+                    difficulty: notes.difficulty,
+                    rating: notes.rating,
+                    upload_id: upload.id,
+                    old_upload_id: original_upload_id,
+                    created_by: &upload.username,
+                    created_by_role: upload.user_role,
+                    created_by_discord: upload.discord_id,
+                    accepted_by: &user.username,
+                    accepted_by_role: user.role,
+                    accepted_by_discord: user.discord_id,
+                }).await
+            } else {
+                WebhookClient::get().send_thumb_notification(ThumbnailNotification::NewUpload {
+                    level_name: &notes.level_name,
+                    level_creator: &notes.creator_name,
+                    level_id: upload.level_id,
+                    difficulty: notes.difficulty,
+                    rating: notes.rating,
+                    upload_id: upload.id,
+                    created_by: &upload.username,
+                    created_by_role: upload.user_role,
+                    created_by_discord: upload.discord_id,
+                    accepted_by: &user.username,
+                    accepted_by_role: user.role,
+                    accepted_by_discord: user.discord_id,
+                }).await
+            };
+        }
+
         util::str_response(StatusCode::OK, &format!("Upload {} accepted", id))
     } else {
         // Reject: don't touch the image, just mark it as rejected
@@ -715,8 +799,8 @@ pub async fn lock_level(
             let _ = WebhookClient::get().send_system_notification(
                 SystemNotification::LevelLocked {
                     level_id: id,
-                    reason: payload.reason.clone(),
-                    by_username: user.username.clone(),
+                    reason: payload.reason.as_deref(),
+                    by_username: &user.username,
                     by_role: user.role,
                     by_discord: user.discord_id,
                 },
@@ -797,7 +881,7 @@ pub async fn unlock_level(
             let _ = WebhookClient::get().send_system_notification(
                 SystemNotification::LevelUnlocked {
                     level_id: id,
-                    by_username: user.username.clone(),
+                    by_username: &user.username,
                     by_role: user.role,
                     by_discord: user.discord_id,
                 },

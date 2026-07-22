@@ -319,7 +319,7 @@ impl AppState {
 
     pub async fn get_upload_info(&self, id: i64) -> Option<UploadInfo> {
         sqlx::query_as::<_, UploadInfo>(
-            "SELECT users.account_id, users.username
+            "SELECT uploads.id AS upload_id, users.account_id, users.username
              FROM uploads
              JOIN users ON uploads.user_id = users.id
              WHERE uploads.level_id = $1 AND accepted = TRUE AND uploads.deleted_at IS NULL
@@ -334,6 +334,7 @@ impl AppState {
     pub async fn get_upload_extended(&self, id: i64) -> Option<UploadExtended> {
         sqlx::query_as::<_, UploadExtended>(
             "SELECT
+                uploads.id AS upload_id,
                 uploads.level_id,
                 users.account_id,
                 users.username,
@@ -934,6 +935,7 @@ impl AppState {
                 upload_time,
                 accepted_time,
                 users.account_id AS account_id,
+                users.discord_id AS discord_id,
                 users.role AS user_role,
                 row_to_json(notes) AS note_data
             FROM uploads

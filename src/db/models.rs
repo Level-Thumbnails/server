@@ -29,6 +29,7 @@ pub struct User {
 
 #[derive(FromRow)]
 pub struct UploadInfo {
+    pub upload_id: i64,
     pub account_id: i64,
     pub username: String,
 }
@@ -36,6 +37,8 @@ pub struct UploadInfo {
 /// Detailed information about a thumbnail upload
 #[derive(FromRow, Serialize, Deserialize, utoipa::ToSchema)]
 pub struct UploadExtended {
+    /// ID of the upload
+    pub upload_id: i64,
     /// ID of the level associated with this upload
     pub level_id: i64,
     /// Geometry Dash account ID of the user who made the upload
@@ -154,6 +157,8 @@ pub struct PendingUpload {
 
     pub note_data: Option<Json<NoteData>>,
     pub account_id: Option<i64>,
+    #[serde(serialize_with = "serialize_discord_snowflake")]
+    pub discord_id: Option<i64>,
     pub user_role: Role,
 
     #[sqlx(skip)]

@@ -254,9 +254,9 @@ pub async fn update_user(
                             let _ = WebhookClient::get().send_system_notification(SystemNotification::RoleChanged {
                                 old_role: target_user.role,
                                 new_role: payload.role.unwrap_or(target_user.role),
-                                username: target_user.username,
+                                username: &target_user.username,
                                 discord_handle: target_user.discord_id,
-                                changed_by: current_user.username,
+                                changed_by: &current_user.username,
                                 changed_by_role: current_user.role,
                                 changed_by_discord: current_user.discord_id,
                             }).await;
@@ -368,7 +368,7 @@ pub async fn delete_thumbnail(
                 let _ = WebhookClient::get().send_system_notification(SystemNotification::ThumbnailDeleted {
                     level_id: id,
                     upload_id,
-                    by_username: user.username,
+                    by_username: &user.username,
                     by_role: user.role,
                     by_discord: user.discord_id,
                 }).await;
@@ -418,12 +418,12 @@ pub async fn ban_user(
                 {
                     Ok(_) => {
                         let _ = WebhookClient::get().send_system_notification(SystemNotification::UserBanned {
-                            username: target_user.username,
+                            username: &target_user.username,
                             role: target_user.role,
                             discord: target_user.discord_id,
-                            reason: payload.reason,
+                            reason: &payload.reason,
                             expires_at: payload.expires_by,
-                            by_username: current_user.username,
+                            by_username: &current_user.username,
                             by_role: current_user.role,
                             by_discord: current_user.discord_id,
                         }).await;
@@ -461,10 +461,10 @@ pub async fn unban_user(
                     Ok(changed) => {
                         if changed {
                             let _ = WebhookClient::get().send_system_notification(SystemNotification::UserUnbanned {
-                                username: target_user.username,
+                                username: &target_user.username,
                                 role: target_user.role,
                                 discord: target_user.discord_id,
-                                by_username: current_user.username,
+                                by_username: &current_user.username,
                                 by_role: current_user.role,
                                 by_discord: current_user.discord_id,
                             }).await;
