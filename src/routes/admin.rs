@@ -6,6 +6,7 @@ use axum::extract::{Path, Query, State};
 use axum::http::{HeaderMap, StatusCode};
 use axum::response::Response;
 use serde::Deserialize;
+use crate::webhooks::{GlobalNotification, SystemNotification, WebhookClient};
 
 const DEFAULT_ADMIN_USER_PAGE_SIZE: u32 = 50;
 const MAX_ADMIN_USER_PAGE_SIZE: u32 = 100;
@@ -56,6 +57,7 @@ pub async fn get_settings(headers: HeaderMap, State(db): State<db::AppState>) ->
 pub struct UpdateSettingsPayload {
     pub pause_submissions: bool,
     pub min_supported_client: String,
+    pub stealth: Option<bool> // whether to hide global notification, defaults to false
 }
 
 pub async fn update_settings(
@@ -65,6 +67,9 @@ pub async fn update_settings(
 ) -> Response {
     match admin_middleware(&headers, &db).await {
         Ok(_) => {
+            let old_pause_submissions = db.settings.read().await.pause_submissions;
+            let new_pause_submissions = payload.pause_submissions;
+
             {
                 let mut settings = db.settings.write().await;
                 settings.pause_submissions = payload.pause_submissions;
@@ -81,7 +86,20 @@ pub async fn update_settings(
             }
 
             match db.save_settings().await {
-                Ok(_) => util::str_response(StatusCode::OK, "Settings updated successfully"),
+                Ok(_) => {
+                    if old_pause_submissions != new_pause_submissions && !payload.stealth.unwrap_or(false) {
+                        let pending = db.get_current_pending_upload_count().await.unwrap_or(0);
+                        let _ = WebhookClient::get().send_global_notification(
+                            if new_pause_submissions {
+                                GlobalNotification::SubmissionsClosed { pending }
+                            } else {
+                                GlobalNotification::SubmissionsOpen
+                            }
+                        ).await;
+                    }
+
+                    util::str_response(StatusCode::OK, "Settings updated successfully")
+                }
                 Err(e) => util::str_response(
                     StatusCode::INTERNAL_SERVER_ERROR,
                     &format!("Failed to save settings: {}", e),
@@ -195,6 +213,7 @@ pub async fn update_user(
                     );
                 }
 
+                let changing_role: bool;
                 if let Some(ref new_role) = payload.role {
                     if !current_user.role.can_assign_role(*new_role) {
                         return util::str_response(
@@ -202,6 +221,9 @@ pub async fn update_user(
                             "Insufficient privileges to assign the requested role",
                         );
                     }
+                    changing_role = target_user.role != *new_role;
+                } else {
+                    changing_role = false;
                 }
 
                 let discord_db: Option<Option<i64>> = match payload.discord_id {
@@ -228,6 +250,18 @@ pub async fn update_user(
 
                 match db.update_user(id, options).await {
                     Ok(_) => {
+                        if changing_role {
+                            let _ = WebhookClient::get().send_system_notification(SystemNotification::RoleChanged {
+                                old_role: target_user.role,
+                                new_role: payload.role.unwrap_or(target_user.role),
+                                username: target_user.username,
+                                discord_handle: target_user.discord_id,
+                                changed_by: current_user.username,
+                                changed_by_role: current_user.role,
+                                changed_by_discord: current_user.discord_id,
+                            }).await;
+                        }
+
                         let query_opts = db::AdminUserQueryOptions {
                             page: 1,
                             per_page: 1,
@@ -322,20 +356,26 @@ pub async fn delete_thumbnail(
     Path(id): Path<i64>,
 ) -> Response {
     match mod_middleware(&headers, &db).await {
-        Ok(_) => match db.delete_thumbnail_by_id(id).await {
-            Ok(deleted) => {
-                if deleted {
-                    thumbnail::delete_thumbnail(id).await;
-                    if let Ok(id) = u64::try_from(id) {
-                        db.remove_active_thumbnail(id).await;
-                    }
-                    thumbnail::purge_resize_cache(id).await;
-                    cache_controller::purge(id);
-                    util::str_response(StatusCode::OK, "Thumbnail deleted successfully")
-                } else {
-                    util::str_response(StatusCode::NOT_FOUND, "Thumbnail not found")
+        Ok(user) => match db.delete_thumbnail_by_id(id).await {
+            Ok(Some(upload_id)) => {
+                thumbnail::delete_thumbnail(id).await;
+                if let Ok(id) = u64::try_from(id) {
+                    db.remove_active_thumbnail(id).await;
                 }
-            }
+                thumbnail::purge_resize_cache(id).await;
+                cache_controller::purge(id);
+
+                let _ = WebhookClient::get().send_system_notification(SystemNotification::ThumbnailDeleted {
+                    level_id: id,
+                    upload_id,
+                    by_username: user.username,
+                    by_role: user.role,
+                    by_discord: user.discord_id,
+                }).await;
+
+                util::str_response(StatusCode::OK, "Thumbnail deleted successfully")
+            },
+            Ok(None) => util::str_response(StatusCode::NOT_FOUND, "Thumbnail not found"),
             Err(e) => util::str_response(
                 StatusCode::INTERNAL_SERVER_ERROR,
                 &format!("Failed to delete thumbnail: {}", e),
@@ -370,13 +410,26 @@ pub async fn ban_user(
                 match db
                     .ban_user(
                         id,
-                        payload.reason,
+                        &payload.reason,
                         current_user.id,
                         payload.expires_by.map(|dt| dt.naive_utc()),
                     )
                     .await
                 {
-                    Ok(_) => util::str_response(StatusCode::OK, "User banned successfully"),
+                    Ok(_) => {
+                        let _ = WebhookClient::get().send_system_notification(SystemNotification::UserBanned {
+                            username: target_user.username,
+                            role: target_user.role,
+                            discord: target_user.discord_id,
+                            reason: payload.reason,
+                            expires_at: payload.expires_by,
+                            by_username: current_user.username,
+                            by_role: current_user.role,
+                            by_discord: current_user.discord_id,
+                        }).await;
+
+                        util::str_response(StatusCode::OK, "User banned successfully")
+                    },
                     Err(e) => util::str_response(
                         StatusCode::INTERNAL_SERVER_ERROR,
                         &format!("Failed to ban user: {}", e),
@@ -407,6 +460,15 @@ pub async fn unban_user(
                 match db.unban_user(id).await {
                     Ok(changed) => {
                         if changed {
+                            let _ = WebhookClient::get().send_system_notification(SystemNotification::UserUnbanned {
+                                username: target_user.username,
+                                role: target_user.role,
+                                discord: target_user.discord_id,
+                                by_username: current_user.username,
+                                by_role: current_user.role,
+                                by_discord: current_user.discord_id,
+                            }).await;
+
                             util::str_response(StatusCode::OK, "User unbanned successfully")
                         } else {
                             util::str_response(

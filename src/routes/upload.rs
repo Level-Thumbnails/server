@@ -1,6 +1,7 @@
 use crate::routes::thumbnail;
 use crate::util::MessageResponse;
 use crate::{cache_controller, db, util};
+use crate::webhooks::{SystemNotification, WebhookClient};
 use axum::Json;
 use axum::body::Bytes;
 use axum::extract::{Path, Query, State};
@@ -300,7 +301,6 @@ pub async fn upload(
 #[derive(PartialEq)]
 enum PendingFilter {
     All,
-    ByLevel(i64),
     ByUser(i64),
 }
 
@@ -391,9 +391,6 @@ async fn get_pending_uploads(
                 );
             }
             sanitized_query.user_id = Some(user_id);
-        }
-        PendingFilter::ByLevel(level_id) => {
-            sanitized_query.level_id = Some(level_id);
         }
         PendingFilter::All => {}
     }
@@ -578,16 +575,10 @@ pub async fn pending_action(
 }
 
 pub async fn get_pending_image(
-    headers: HeaderMap,
     State(db): State<db::AppState>,
     Path(id): Path<i64>,
 ) -> Response {
-    let user = match util::auth_middleware(&headers, &db).await {
-        Ok(user) => user,
-        Err(response) => return response,
-    };
-
-    let upload = match db.get_pending_upload(id).await {
+    match db.get_pending_upload(id).await {
         Ok(upload) => upload,
         Err(e) => {
             return util::str_response(
@@ -596,13 +587,6 @@ pub async fn get_pending_image(
             );
         }
     };
-
-    if user.id != upload.user_id && !user.role.can_moderate_pending_uploads() {
-        return util::str_response(
-            StatusCode::FORBIDDEN,
-            "You can only view your own pending uploads",
-        );
-    }
 
     let image_path = util::get_upload_path(id);
     let image_data = match tokio::fs::read(&image_path).await {
@@ -619,7 +603,7 @@ pub async fn get_pending_image(
         .header(header::CONTENT_TYPE, "image/webp")
         .header(
             header::CONTENT_DISPOSITION,
-            format!("inline; filename=\"pending_{}_{}.webp\"", upload.user_id, id),
+            format!("inline; filename=\"upload_{}.webp\"", id),
         )
         .header(header::CACHE_CONTROL, "public, max-age=31536000, immutable")
         .header(header::CONTENT_LENGTH, image_data.len())
@@ -727,10 +711,22 @@ pub async fn lock_level(
     };
 
     match db.lock_level(id, user.id, payload.reason.as_deref()).await {
-        Ok(_) => util::str_response(
-            StatusCode::OK,
-            &format!("Level {} is now locked for submissions", id),
-        ),
+        Ok(_) => {
+            let _ = WebhookClient::get().send_system_notification(
+                SystemNotification::LevelLocked {
+                    level_id: id,
+                    reason: payload.reason.clone(),
+                    by_username: user.username.clone(),
+                    by_role: user.role,
+                    by_discord: user.discord_id,
+                },
+            ).await;
+
+            util::str_response(
+                StatusCode::OK,
+                &format!("Level {} is now locked for submissions", id),
+            )
+        },
         Err(e) => util::str_response(
             StatusCode::INTERNAL_SERVER_ERROR,
             &format!("Failed to lock level {}: {}", id, e),
@@ -791,15 +787,27 @@ pub async fn unlock_level(
     State(db): State<db::AppState>,
     Path(id): Path<i64>,
 ) -> Response {
-    if let Err(response) = authenticate_admin(&headers, &db).await {
-        return response;
-    }
+    let user = match authenticate_admin(&headers, &db).await {
+        Ok(user) => user,
+        Err(response) => return response,
+    };
 
     match db.unlock_level(id).await {
-        Ok(true) => util::str_response(
-            StatusCode::OK,
-            &format!("Level {} is now unlocked for submissions", id),
-        ),
+        Ok(true) => {
+            let _ = WebhookClient::get().send_system_notification(
+                SystemNotification::LevelUnlocked {
+                    level_id: id,
+                    by_username: user.username.clone(),
+                    by_role: user.role,
+                    by_discord: user.discord_id,
+                },
+            ).await;
+
+            util::str_response(
+                StatusCode::OK,
+                &format!("Level {} is now unlocked for submissions", id),
+            )
+        },
         Ok(false) => util::str_response(StatusCode::NOT_FOUND, "Level lock not found"),
         Err(e) => util::str_response(
             StatusCode::INTERNAL_SERVER_ERROR,

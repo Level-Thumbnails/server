@@ -17,8 +17,11 @@ mod cache_controller;
 pub mod db;
 mod routes;
 mod util;
+mod webhooks;
 
 use routes::{admin, login, stats, thumbnail, upload, user};
+use webhooks::SystemNotification::ServerRestart;
+use crate::webhooks::WebhookClient;
 
 struct SecurityAddon;
 
@@ -196,6 +199,8 @@ async fn main() {
     let listener = TcpListener::bind(bind_address).await.unwrap();
 
     info!("Started server!");
+    let _ = WebhookClient::get().send_system_notification(ServerRestart).await;
+
     axum::serve(listener, app).await.unwrap();
 }
 

@@ -635,16 +635,17 @@ impl AppState {
         Ok(result.rows_affected() > 0)
     }
 
-    pub async fn delete_thumbnail_by_id(&self, level_id: i64) -> Result<bool, sqlx::Error> {
-        let result = sqlx::query(
+    pub async fn delete_thumbnail_by_id(&self, level_id: i64) -> Result<Option<i64>, sqlx::Error> {
+        let upload_id = sqlx::query_scalar::<_, i64>(
             "UPDATE uploads SET deleted_at = NOW()
-             WHERE level_id = $1 AND accepted = TRUE AND deleted_at IS NULL",
+             WHERE level_id = $1 AND accepted = TRUE AND deleted_at IS NULL
+             RETURNING id",
         )
         .bind(level_id)
-        .execute(&*self.pool)
+        .fetch_optional(&*self.pool)
         .await?;
 
-        Ok(result.rows_affected() > 0)
+        Ok(upload_id)
     }
 
     pub async fn get_pending_uploads_paginated(
@@ -1227,7 +1228,7 @@ impl AppState {
     pub async fn ban_user(
         &self,
         user_id: i64,
-        reason: String,
+        reason: &str,
         banned_by: i64,
         expires_at: Option<NaiveDateTime>,
     ) -> Result<(), sqlx::Error> {
