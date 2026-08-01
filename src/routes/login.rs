@@ -7,6 +7,7 @@ use axum::response::Response;
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 use std::env;
+use std::sync::LazyLock;
 use tracing::{error, warn};
 
 #[derive(Deserialize, Debug)]
@@ -93,6 +94,9 @@ pub struct DiscordOAuthPayload {
     code: String,
 }
 
+static DISCORD_CLIENT: LazyLock<reqwest::Client> =
+    LazyLock::new(|| reqwest::Client::builder().build().expect("Failed to create HTTP client"));
+
 pub async fn discord_oauth_handler(
     Query(query): Query<DiscordOAuthPayload>,
     State(db): State<db::AppState>,
@@ -101,7 +105,7 @@ pub async fn discord_oauth_handler(
         return util::str_response(StatusCode::BAD_REQUEST, "Missing code parameter");
     }
 
-    let client = reqwest::Client::new();
+    let client = &*DISCORD_CLIENT;
 
     // Use the code to fetch user info from Discord
     let res = match client

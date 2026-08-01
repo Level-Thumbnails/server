@@ -71,8 +71,28 @@ async fn authenticate_admin(headers: &HeaderMap, db: &db::AppState) -> Result<db
 
 // Helper function to validate image dimensions and convert to WebP
 fn process_image(data: &[u8]) -> Result<Vec<u8>, String> {
-    let image = image::load_from_memory(data).map_err(|e| format!("Invalid image data: {}", e))?;
+    let reader = image::ImageReader::new(std::io::Cursor::new(data))
+        .with_guessed_format()
+        .map_err(|e| format!("Invalid image data: {}", e))?;
 
+    let (declared_width, declared_height) =
+        reader.into_dimensions().map_err(|e| format!("Invalid image data: {}", e))?;
+
+    if declared_width != IMAGE_WIDTH || declared_height != IMAGE_HEIGHT {
+        return Err(format!("Image must be exactly {}x{}", IMAGE_WIDTH, IMAGE_HEIGHT));
+    }
+
+    let mut reader = image::ImageReader::new(std::io::Cursor::new(data))
+        .with_guessed_format()
+        .map_err(|e| format!("Invalid image data: {}", e))?;
+
+    let mut limits = image::Limits::default();
+    limits.max_image_width = Some(IMAGE_WIDTH);
+    limits.max_image_height = Some(IMAGE_HEIGHT);
+    reader.limits(limits);
+
+    let image = reader.decode().map_err(|e| format!("Invalid image data: {}", e))?;
+ 
     if image.width() != IMAGE_WIDTH || image.height() != IMAGE_HEIGHT {
         return Err(format!("Image must be exactly {}x{}", IMAGE_WIDTH, IMAGE_HEIGHT));
     }
