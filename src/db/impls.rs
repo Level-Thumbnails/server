@@ -230,8 +230,13 @@ async fn migrate_hardlink_storage(pool: &sqlx::Pool<Postgres>) {
 impl AppState {
     pub async fn new() -> Self {
         let connection_string = dotenv::var("DATABASE_URL").expect("DATABASE_URL must be set");
+        let max_connections: u32 = dotenv::var("DB_MAX_CONNECTIONS")
+            .ok()
+            .and_then(|v| v.parse().ok())
+            .unwrap_or(5);
+
         let pool = PgPoolOptions::new()
-            .max_connections(5)
+            .max_connections(max_connections)
             .connect(&connection_string)
             .await
             .expect("Failed to connect to the database");
