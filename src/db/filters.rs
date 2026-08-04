@@ -4,8 +4,8 @@ use crate::db::{
 };
 use sqlx::{Postgres, QueryBuilder};
 
-pub fn apply_pending_filters<'a>(
-    builder: &mut QueryBuilder<'a, Postgres>,
+pub fn apply_pending_filters(
+    builder: &mut QueryBuilder<Postgres>,
     options: &PendingQueryOptions,
 ) {
     if let Some(level_id) = options.level_id {
@@ -46,7 +46,7 @@ pub fn apply_pending_filters<'a>(
 }
 
 pub fn apply_pending_sort(
-    builder: &mut QueryBuilder<'_, Postgres>,
+    builder: &mut QueryBuilder<Postgres>,
     sort_by: PendingUploadSortBy,
     sort_direction: SortDirection,
 ) {
@@ -77,8 +77,8 @@ pub fn apply_pending_sort(
     builder.push(", uploads.id ").push(direction);
 }
 
-pub fn apply_user_filters<'a>(
-    builder: &mut QueryBuilder<'a, Postgres>,
+pub fn apply_user_filters(
+    builder: &mut QueryBuilder<Postgres>,
     options: &AdminUserQueryOptions,
 ) {
     if let Some(id) = options.id {
@@ -117,7 +117,7 @@ pub fn apply_user_filters<'a>(
 }
 
 pub fn apply_user_sort(
-    builder: &mut QueryBuilder<'_, Postgres>,
+    builder: &mut QueryBuilder<Postgres>,
     sort_by: UserListSortBy,
     sort_direction: SortDirection,
 ) {

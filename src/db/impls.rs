@@ -12,7 +12,7 @@ use crate::util;
 use crate::util::ModUserAgent;
 use chrono::{Datelike, NaiveDate, NaiveDateTime, Utc};
 use sqlx::postgres::PgPoolOptions;
-use sqlx::{FromRow, Postgres, QueryBuilder};
+use sqlx::{AssertSqlSafe, FromRow, Postgres, QueryBuilder};
 use std::collections::{HashMap, HashSet};
 use std::path::Path;
 use std::sync::Arc;
@@ -706,10 +706,10 @@ impl AppState {
         &self,
         user_id: i64,
     ) -> Result<Vec<PendingUpload>, sqlx::Error> {
-        sqlx::query_as::<_, PendingUpload>(&format!(
+        sqlx::query_as::<_, PendingUpload>(AssertSqlSafe(format!(
             "{} AND user_id = $1 ORDER BY upload_time",
             PENDING_UPLOAD_SELECT
-        ))
+        )))
         .bind(user_id)
         .fetch_all(&*self.pool)
         .await
