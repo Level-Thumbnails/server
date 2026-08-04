@@ -16,7 +16,8 @@ use sqlx::{AssertSqlSafe, FromRow, Postgres, QueryBuilder};
 use std::collections::{HashMap, HashSet};
 use std::path::Path;
 use std::sync::Arc;
-use tokio::sync::RwLock;
+use dashmap::DashMap;
+use tokio::sync::{RwLock, Semaphore};
 use tracing::{error, warn};
 
 fn month_start(date: NaiveDate) -> NaiveDate {
@@ -276,12 +277,23 @@ impl AppState {
 
         let active_thumbnails = preload_active_thumbnail_ids().await;
 
+        let max_concurrent = dotenv::var("MAX_RESIZE_TASKS")
+            .ok()
+            .and_then(|v| v.parse().ok())
+            .unwrap_or(
+                std::thread::available_parallelism()
+                    .map(|n| n.get() as u32)
+                    .unwrap_or(8)
+            );
+
         AppState {
             pool: Arc::new(pool),
             settings: Arc::new(RwLock::new(settings)),
             online_moderators: Arc::new(RwLock::new(HashMap::new())),
             registered_users: Arc::new(RwLock::new(set)),
             active_thumbnails: Arc::new(RwLock::new(active_thumbnails)),
+            resize_semaphore: Arc::new(Semaphore::new(max_concurrent as usize)),
+            active_resizes: Arc::new(DashMap::new()),
         }
     }
 

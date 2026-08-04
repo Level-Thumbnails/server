@@ -6,13 +6,17 @@ use axum::response::Response;
 use image::ImageReader;
 use serde::{Deserialize, Serialize};
 use std::path::PathBuf;
+use axum::body::Bytes;
+use dashmap::{Entry};
+use futures::FutureExt;
 use tracing::warn;
 use webp::Encoder;
+use crate::db::ResizeKey;
 
 const CACHE_DIR: &str = "thumbnails/cache";
 
 /// Thumbnail resolution options
-#[derive(Deserialize, Serialize, Debug, Clone, Copy, utoipa::ToSchema)]
+#[derive(Deserialize, Serialize, Debug, Clone, Copy, utoipa::ToSchema, Eq, Hash, PartialEq)]
 pub enum Res {
     /// High resolution thumbnail (1920x1080)
     #[serde(rename = "high")]
@@ -69,16 +73,18 @@ pub async fn purge_resize_cache(id: i64) {
     }
 }
 
-fn image_response(image_data: Vec<u8>, id: u64, upload_info: &db::UploadInfo) -> Response {
+fn image_response(image_data: impl Into<Bytes>, id: u64, upload_info: &db::UploadInfo) -> Response {
+    let bytes: Bytes = image_data.into();
+
     Response::builder()
         .header(header::CONTENT_TYPE, "image/webp")
         .header(header::CONTENT_DISPOSITION, format!("inline; filename=\"{}.webp\"", id))
         .header(header::CACHE_CONTROL, "public, max-age=31536000, immutable")
-        .header(header::CONTENT_LENGTH, image_data.len())
+        .header(header::CONTENT_LENGTH, bytes.len())
         .header("X-Level-ID", id.to_string())
         .header("X-Thumbnail-Author", &upload_info.username)
         .header("X-Thumbnail-User-ID", upload_info.account_id.to_string())
-        .body(image_data.into())
+        .body(bytes.into())
         .unwrap()
 }
 
@@ -98,10 +104,62 @@ async fn read_original_image(image_path: &PathBuf) -> Result<Vec<u8>, Response> 
     })
 }
 
-async fn resize_image(image_path: PathBuf, target_res: Res) -> Result<Vec<u8>, Response> {
-    let (width, height) = target_res.dimensions();
+async fn get_or_resize_image(
+    image_path: PathBuf,
+    key: ResizeKey,
+    state: &db::AppState,
+) -> Result<Bytes, Response> {
+    let cache_file = cache_path(key.id, key.res);
+    if let Ok(true) = tokio::fs::try_exists(&cache_file).await {
+        if let Ok(cached_data) = tokio::fs::read(&cache_file).await {
+            return Ok(cached_data.into());
+        }
+    }
 
-    tokio::task::spawn_blocking(move || -> Result<Vec<u8>, String> {
+    let shared_fut = match state.active_resizes.entry(key.clone()) {
+        Entry::Occupied(entry) => entry.get().clone(),
+        Entry::Vacant(entry) => {
+            let semaphore = state.resize_semaphore.clone();
+            let active_resizes = state.active_resizes.clone();
+            let key_clone = key.clone();
+            let cache_file_clone = cache_file.clone();
+
+            let fut = async move {
+                let permit = semaphore.acquire_owned().await;
+
+                let result = match permit {
+                    Ok(_permit) => execute_resize(image_path, key_clone.res).await,
+                    Err(_) => Err("Semaphore closed".to_string()),
+                };
+
+                if let Ok(ref bytes) = result {
+                    let _ = tokio::fs::write(&cache_file_clone, bytes).await;
+                }
+
+                active_resizes.remove(&key_clone);
+                result
+            }
+                .boxed()
+                .shared();
+
+            entry.insert(fut.clone());
+            fut
+        }
+    };
+
+    match shared_fut.await {
+        Ok(bytes) => Ok(bytes),
+        Err(err_msg) => Err(util::str_response(
+            StatusCode::INTERNAL_SERVER_ERROR,
+            &format!("Image processing error: {}", err_msg),
+        )),
+    }
+}
+
+async fn execute_resize(image_path: PathBuf, res: Res) -> db::ResizeResult {
+    let (width, height) = res.dimensions();
+
+    tokio::task::spawn_blocking(move || -> db::ResizeResult {
         let image = ImageReader::open(&image_path)
             .map_err(|e| format!("Failed to open image: {}", e))?
             .decode()
@@ -110,26 +168,16 @@ async fn resize_image(image_path: PathBuf, target_res: Res) -> Result<Vec<u8>, R
         let resized_image =
             image.resize_exact(width, height, image::imageops::FilterType::Lanczos3).to_rgb8();
 
-        Ok(Encoder::from_rgb(&resized_image, width, height).encode_lossless().to_vec())
+        Ok(Encoder::from_rgb(&resized_image, width, height).encode_lossless().to_vec().into())
     })
     .await
-    .map_err(|e| {
-        util::str_response(StatusCode::INTERNAL_SERVER_ERROR, &format!("Task join error: {}", e))
-    })?
-    .map_err(|e| {
-        util::str_response(
-            StatusCode::INTERNAL_SERVER_ERROR,
-            &format!("Image processing error: {}", e),
-        )
-    })
+    .map_err(|e| format!("Task join error: {}", e))?
 }
 
 async fn handle_image(id: u64, res: Res, db: db::AppState) -> Response {
-    // info!("Handling image request for ID: {}, Resolution: {:?}", id, res);
-
     // Check if image file exists
     let image_path = PathBuf::from(format!("thumbnails/{}.webp", id));
-    if !image_path.exists() {
+    if !tokio::fs::try_exists(&image_path).await.unwrap_or_default() {
         return util::str_response(StatusCode::NOT_FOUND, "Image not found");
     }
 
@@ -151,22 +199,12 @@ async fn handle_image(id: u64, res: Res, db: db::AppState) -> Response {
         }
 
         Res::Medium | Res::Small => {
-            let cache_file = cache_path(id, res);
-            if let Ok(true) = tokio::fs::try_exists(&cache_file).await {
-                if let Ok(cached_data) = tokio::fs::read(&cache_file).await {
-                    return image_response(cached_data, id, &upload_info);
-                }
-            }
-
             // For lower resolutions, resize the image
-            let resized_data = match resize_image(image_path, res).await {
-                Ok(data) => data,
-                Err(response) => return response,
-            };
-
-            let _ = tokio::fs::write(&cache_file, &resized_data).await;
-
-            image_response(resized_data, id, &upload_info)
+            let key = ResizeKey { id, res };
+            match get_or_resize_image(image_path, key, &db).await {
+                Ok(resized_data) => image_response(resized_data, id, &upload_info),
+                Err(response) => response,
+            }
         }
     }
 }
