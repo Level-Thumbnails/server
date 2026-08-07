@@ -71,17 +71,6 @@ async fn authenticate_admin(headers: &HeaderMap, db: &db::AppState) -> Result<db
 
 // Helper function to validate image dimensions and convert to WebP
 fn process_image(data: &[u8]) -> Result<Vec<u8>, String> {
-    let reader = image::ImageReader::new(std::io::Cursor::new(data))
-        .with_guessed_format()
-        .map_err(|e| format!("Invalid image data: {}", e))?;
-
-    let (declared_width, declared_height) =
-        reader.into_dimensions().map_err(|e| format!("Invalid image data: {}", e))?;
-
-    if declared_width != IMAGE_WIDTH || declared_height != IMAGE_HEIGHT {
-        return Err(format!("Image must be exactly {}x{}", IMAGE_WIDTH, IMAGE_HEIGHT));
-    }
-
     let mut reader = image::ImageReader::new(std::io::Cursor::new(data))
         .with_guessed_format()
         .map_err(|e| format!("Invalid image data: {}", e))?;
@@ -91,8 +80,8 @@ fn process_image(data: &[u8]) -> Result<Vec<u8>, String> {
     limits.max_image_height = Some(IMAGE_HEIGHT);
     reader.limits(limits);
 
-    let image = reader.decode().map_err(|e| format!("Invalid image data: {}", e))?;
- 
+    let image = reader.decode().map_err(|e| format!("Failed to decode image: {}", e))?;
+
     if image.width() != IMAGE_WIDTH || image.height() != IMAGE_HEIGHT {
         return Err(format!("Image must be exactly {}x{}", IMAGE_WIDTH, IMAGE_HEIGHT));
     }
@@ -322,9 +311,10 @@ pub async fn upload(
     }
 
     // Process and validate the image
-    let webp_data = match process_image(&data) {
-        Ok(data) => data,
-        Err(e) => return util::str_response(StatusCode::BAD_REQUEST, &e),
+    let webp_data = match tokio::task::spawn_blocking(move || process_image(&data)).await {
+        Ok(Ok(data)) => data,
+        Ok(Err(e)) => return util::str_response(StatusCode::BAD_REQUEST, &e),
+        Err(_) => return util::str_response(StatusCode::INTERNAL_SERVER_ERROR, "Image processing failed"),
     };
 
     if user.role.can_upload_replacement_directly() {
