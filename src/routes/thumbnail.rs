@@ -110,10 +110,8 @@ async fn get_or_resize_image(
     state: &db::AppState,
 ) -> Result<Bytes, Response> {
     let cache_file = cache_path(key.id, key.res);
-    if let Ok(true) = tokio::fs::try_exists(&cache_file).await {
-        if let Ok(cached_data) = tokio::fs::read(&cache_file).await {
-            return Ok(cached_data.into());
-        }
+    if let Ok(cached_data) = tokio::fs::read(&cache_file).await {
+        return Ok(cached_data.into());
     }
 
     let shared_fut = match state.active_resizes.entry(key.clone()) {
@@ -124,20 +122,26 @@ async fn get_or_resize_image(
             let key_clone = key.clone();
             let cache_file_clone = cache_file.clone();
 
-            let fut = async move {
-                let permit = semaphore.acquire_owned().await;
-
-                let result = match permit {
-                    Ok(_permit) => execute_resize(image_path, key_clone.res).await,
-                    Err(_) => Err("Semaphore closed".to_string()),
-                };
+            let handle = tokio::spawn(async move {
+                let _permit = semaphore.acquire_owned().await;
+                let result = execute_resize(image_path, key_clone.res).await;
 
                 if let Ok(ref bytes) = result {
-                    let _ = tokio::fs::write(&cache_file_clone, bytes).await;
+                    let temp_path = cache_file_clone.with_extension("tmp");
+                    if tokio::fs::write(&temp_path, bytes).await.is_ok() {
+                        let _ = tokio::fs::rename(&temp_path, &cache_file_clone).await;
+                    }
                 }
 
                 active_resizes.remove(&key_clone);
                 result
+            });
+
+            let fut = async move {
+                match handle.await {
+                    Ok(res) => res,
+                    Err(_) => Err("Task panicked or was aborted".to_string()),
+                }
             }
                 .boxed()
                 .shared();
