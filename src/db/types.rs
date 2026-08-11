@@ -31,6 +31,7 @@ pub enum Permission {
     ViewOtherUserHistory,
     ManageLevelLocks,
     ManageSettings,
+    SubmitDuringLevelLocks,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize, Serialize, sqlx::Type)]
@@ -89,6 +90,9 @@ impl Role {
             }
             Permission::ManageLevelLocks => matches!(self, Role::Admin | Role::Owner),
             Permission::ManageSettings => matches!(self, Role::Admin | Role::Owner),
+            Permission::SubmitDuringLevelLocks => {
+                matches!(self, Role::Verified | Role::Moderator | Role::Admin | Role::Owner)
+            }
         }
     }
 
@@ -128,6 +132,10 @@ impl Role {
 
     pub fn can_upload_replacement_directly(self) -> bool {
         self.has_permission(Permission::DirectUploadReplacement)
+    }
+    
+    pub fn can_add_to_queue_during_locks(self) -> bool {
+        self.has_permission(Permission::SubmitDuringLevelLocks)
     }
 }
 

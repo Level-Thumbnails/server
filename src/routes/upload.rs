@@ -169,7 +169,7 @@ async fn add_to_pending(
     user: &db::User,
     db: &db::AppState,
 ) -> Response {
-    if db.settings.read().await.pause_submissions {
+    if !user.role.can_add_to_queue_during_locks() && db.settings.read().await.pause_submissions {
         return util::str_response(
             StatusCode::SERVICE_UNAVAILABLE,
             "Thumbnail submissions are currently closed because there are too many submissions. \
