@@ -921,9 +921,8 @@ pub struct AllLevelLocksResponse {
 #[utoipa::path(
     get,
     path = "/thumbnail/locks",
-    description = "Get all currently locked levels with their lock reason and timestamp. Requires admin or higher permissions.",
+    description = "Get all currently locked levels with their lock reason and timestamp.",
     tag = "Level Locking",
-    security(("bearerAuth" = []), ("cookieAuth" = [])),
     responses(
         (
             status = 200,
@@ -967,10 +966,6 @@ pub struct AllLevelLocksResponse {
     )
 )]
 pub async fn get_all_level_locks(headers: HeaderMap, State(db): State<db::AppState>) -> Response {
-    if let Err(response) = authenticate_admin(&headers, &db).await {
-        return response;
-    }
-
     match db.get_all_level_locks().await {
         Ok(locks) => util::response(
             StatusCode::OK,
