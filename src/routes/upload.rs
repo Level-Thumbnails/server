@@ -965,7 +965,7 @@ pub struct AllLevelLocksResponse {
         ),
     )
 )]
-pub async fn get_all_level_locks(headers: HeaderMap, State(db): State<db::AppState>) -> Response {
+pub async fn get_all_level_locks(State(db): State<db::AppState>) -> Response {
     match db.get_all_level_locks().await {
         Ok(locks) => util::response(
             StatusCode::OK,
