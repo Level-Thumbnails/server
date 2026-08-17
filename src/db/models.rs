@@ -185,6 +185,19 @@ pub struct RejectedUpload {
     pub accepted_by_username: Option<String>,
 }
 
+#[derive(Debug, Clone, FromRow, Serialize, Deserialize)]
+pub struct ReplacedUpload {
+    pub id: i64,
+    pub level_id: i64,
+    pub upload_time: NaiveDateTime,
+    pub accepted_time: Option<NaiveDateTime>,
+    pub note_data: Option<Json<NoteData>>,
+    pub replaced_by_upload_id: i64,
+    pub replaced_at: NaiveDateTime,
+    pub replaced_by_username: String,
+    pub replacement_note_data: Option<Json<NoteData>>,
+}
+
 #[derive(Debug, Clone)]
 pub struct PendingQueryOptions {
     pub page: u32,
@@ -219,10 +232,17 @@ pub struct RejectedUploadsPage {
     pub total: i64,
 }
 
+#[derive(Debug, Clone)]
+pub struct ReplacedUploadsPage {
+    pub uploads: Vec<ReplacedUpload>,
+    pub total: i64,
+}
+
 #[derive(Debug, Clone, Serialize)]
 pub struct MyUploadsSummary {
     pub active: i64,
     pub pending: i64,
+    pub replaced: i64,
     pub rejected: i64,
 }
 

@@ -164,6 +164,7 @@ async fn main() {
         .route("/user/me/uploads/summary", get(user::get_my_upload_summary))
         .route("/user/me/uploads/active", get(user::get_my_active_uploads))
         .route("/user/me/uploads/pending", get(user::get_my_pending_uploads))
+        .route("/user/me/uploads/replaced", get(user::get_my_replaced_uploads))
         .route("/user/me/uploads/rejected", get(user::get_my_rejected_uploads))
         // .route("/user/me", delete(user::delete_me))
         .route("/user/{id}", get(user::get_user_by_id))

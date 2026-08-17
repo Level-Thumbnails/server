@@ -28,6 +28,11 @@ impl MyUploadsPageLike<db::PendingUpload> for db::PendingUploadsPage {
     }
 }
 
+impl MyUploadsPageLike<db::ReplacedUpload> for db::ReplacedUploadsPage {
+    fn uploads(self) -> Vec<db::ReplacedUpload> { self.uploads }
+    fn total(&self) -> i64 { self.total }
+}
+
 impl MyUploadsPageLike<db::RejectedUpload> for db::RejectedUploadsPage {
     fn uploads(self) -> Vec<db::RejectedUpload> {
         self.uploads
@@ -198,6 +203,7 @@ pub async fn get_my_active_uploads(
 pub struct MyUploadsSummaryResponse {
     pub active: i64,
     pub pending: i64,
+    pub replaced: i64,
     pub rejected: i64,
 }
 
@@ -221,6 +227,7 @@ pub async fn get_my_upload_summary(
                 "data": MyUploadsSummaryResponse {
                     active: summary.active,
                     pending: summary.pending,
+                    replaced: summary.replaced,
                     rejected: summary.rejected,
                 },
             }),
@@ -257,6 +264,29 @@ pub async fn get_my_pending_uploads(
                 sort_by: db::PendingUploadSortBy::UploadTime,
                 sort_dir: db::SortDirection::Asc,
             })
+            .await
+        },
+    )
+    .await
+}
+
+pub async fn get_my_replaced_uploads(
+    headers: HeaderMap,
+    Query(params): Query<MyUploadsQueryParams>,
+    State(db): State<db::AppState>,
+) -> Response {
+    get_my_uploads_page_response(
+        headers,
+        Query(params),
+        State(db),
+        "Failed to fetch replaced uploads",
+        |user_id, params, db| async move {
+            db.get_user_replaced_uploads_paginated(
+                user_id,
+                params.page,
+                params.per_page,
+                params.level_id_search,
+            )
             .await
         },
     )

@@ -5,18 +5,19 @@ use crate::db::{
     ActiveUpload, ActiveUploadsPage, AdminUserQueryOptions, AdminUserRow, AdminUsersPage, AppState,
     BadgeLists, LevelLock, MAX_MY_UPLOADS_PAGE_SIZE, MyUploadsSummary, NoteData,
     PENDING_UPLOAD_SELECT, PendingQueryOptions, PendingUpload, PendingUploadsPage, RejectedUpload,
-    RejectedUploadsPage, Settings, StatsSnapshot, USER_STATS_CTE, UpdateUserOptions,
-    UploadExtended, UploadInfo, User, UserBan, UserHistoryPoint, UserStats,
+    RejectedUploadsPage, ReplacedUpload, ReplacedUploadsPage, Settings, StatsSnapshot,
+    USER_STATS_CTE, UpdateUserOptions, UploadExtended, UploadInfo, User, UserBan, UserHistoryPoint,
+    UserStats,
 };
 use crate::util;
 use crate::util::ModUserAgent;
 use chrono::{Datelike, NaiveDate, NaiveDateTime, Utc};
+use dashmap::DashMap;
 use sqlx::postgres::PgPoolOptions;
 use sqlx::{AssertSqlSafe, FromRow, Postgres, QueryBuilder};
 use std::collections::{HashMap, HashSet};
 use std::path::Path;
 use std::sync::Arc;
-use dashmap::DashMap;
 use tokio::sync::{RwLock, Semaphore};
 use tracing::{error, warn};
 
@@ -231,10 +232,8 @@ async fn migrate_hardlink_storage(pool: &sqlx::Pool<Postgres>) {
 impl AppState {
     pub async fn new() -> Self {
         let connection_string = dotenv::var("DATABASE_URL").expect("DATABASE_URL must be set");
-        let max_connections: u32 = dotenv::var("DB_MAX_CONNECTIONS")
-            .ok()
-            .and_then(|v| v.parse().ok())
-            .unwrap_or(5);
+        let max_connections: u32 =
+            dotenv::var("DB_MAX_CONNECTIONS").ok().and_then(|v| v.parse().ok()).unwrap_or(5);
 
         let pool = PgPoolOptions::new()
             .max_connections(max_connections)
@@ -280,11 +279,7 @@ impl AppState {
         let max_concurrent = dotenv::var("MAX_RESIZE_TASKS")
             .ok()
             .and_then(|v| v.parse().ok())
-            .unwrap_or(
-                std::thread::available_parallelism()
-                    .map(|n| n.get() as u32)
-                    .unwrap_or(8)
-            );
+            .unwrap_or(std::thread::available_parallelism().map(|n| n.get() as u32).unwrap_or(8));
 
         AppState {
             pool: Arc::new(pool),
@@ -910,6 +905,51 @@ impl AppState {
             .await?
         };
 
+        let replaced = if let Some(level_id) = level_id_search {
+            sqlx::query_scalar(
+                "WITH accepted_chain AS (
+                SELECT
+                    uploads.user_id,
+                    uploads.level_id,
+                    LEAD(uploads.id) OVER (
+                        PARTITION BY uploads.level_id
+                        ORDER BY uploads.upload_time ASC, uploads.id ASC
+                    ) AS replacement_id
+                FROM uploads
+                WHERE uploads.accepted = TRUE AND uploads.deleted_at IS NULL
+            )
+            SELECT COUNT(*)
+            FROM accepted_chain c
+            WHERE c.user_id = $1
+              AND c.replacement_id IS NOT NULL
+              AND c.level_id = $2",
+            )
+                .bind(user_id)
+                .bind(level_id)
+                .fetch_one(&*self.pool)
+                .await?
+        } else {
+            sqlx::query_scalar(
+                "WITH accepted_chain AS (
+                SELECT
+                    uploads.user_id,
+                    LEAD(uploads.id) OVER (
+                        PARTITION BY uploads.level_id
+                        ORDER BY uploads.upload_time ASC, uploads.id ASC
+                    ) AS replacement_id
+                FROM uploads
+                WHERE uploads.accepted = TRUE AND uploads.deleted_at IS NULL
+            )
+            SELECT COUNT(*)
+            FROM accepted_chain c
+            WHERE c.user_id = $1
+              AND c.replacement_id IS NOT NULL",
+            )
+                .bind(user_id)
+                .fetch_one(&*self.pool)
+                .await?
+        };
+
         let rejected = if let Some(level_id) = level_id_search {
             sqlx::query_scalar(
                 "SELECT COUNT(*)
@@ -938,7 +978,7 @@ impl AppState {
             .await?
         };
 
-        Ok(MyUploadsSummary { active, pending, rejected })
+        Ok(MyUploadsSummary { active, pending, replaced, rejected })
     }
 
     pub async fn get_pending_upload(&self, id: i64) -> Result<PendingUpload, sqlx::Error> {
@@ -1308,5 +1348,95 @@ impl AppState {
         .bind(level_id)
         .fetch_one(&*self.pool)
         .await
+    }
+
+    pub async fn get_user_replaced_uploads_paginated(
+        &self,
+        user_id: i64,
+        page: u32,
+        per_page: u32,
+        level_id_search: Option<String>,
+    ) -> Result<ReplacedUploadsPage, sqlx::Error> {
+        let per_page = per_page.min(MAX_MY_UPLOADS_PAGE_SIZE) as i64;
+        let page = page.max(1) as i64;
+        let offset = (page - 1) * per_page;
+        let level_id_search = level_id_search.and_then(|s| s.parse::<i64>().ok());
+
+        let uploads = sqlx::query_as::<_, ReplacedUpload>(
+            "WITH accepted_chain AS (
+                SELECT
+                    uploads.id,
+                    uploads.user_id,
+                    uploads.level_id,
+                    uploads.upload_time,
+                    uploads.accepted_time,
+                    LEAD(uploads.id) OVER (
+                        PARTITION BY uploads.level_id
+                        ORDER BY uploads.upload_time ASC, uploads.id ASC
+                    ) AS replacement_id,
+                    LEAD(uploads.user_id) OVER (
+                        PARTITION BY uploads.level_id
+                        ORDER BY uploads.upload_time ASC, uploads.id ASC
+                    ) AS replacement_by_user_id,
+                    LEAD(uploads.upload_time) OVER (
+                        PARTITION BY uploads.level_id
+                        ORDER BY uploads.upload_time ASC, uploads.id ASC
+                    ) AS replaced_at
+                FROM uploads
+                WHERE uploads.accepted = TRUE AND uploads.deleted_at IS NULL
+            )
+            SELECT
+                c.id,
+                c.level_id,
+                c.upload_time,
+                c.accepted_time,
+                row_to_json(notes) AS note_data,
+                c.replacement_id AS replaced_by_upload_id,
+                c.replaced_at,
+                replaced_by.username AS replaced_by_username,
+                row_to_json(replacement_note) AS replacement_note_data
+            FROM accepted_chain c
+            LEFT JOIN users AS replaced_by ON replaced_by.id = c.replacement_by_user_id
+            LEFT JOIN notes ON notes.upload_id = c.id
+            LEFT JOIN notes AS replacement_note ON replacement_note.upload_id = c.replacement_id
+            WHERE c.user_id = $1
+              AND c.replacement_id IS NOT NULL
+              AND ($4::BIGINT IS NULL OR c.level_id = $4)
+            ORDER BY c.replaced_at DESC, c.id DESC
+            LIMIT $2 OFFSET $3
+            ",
+        )
+        .bind(user_id)
+        .bind(per_page)
+        .bind(offset)
+        .bind(level_id_search)
+        .fetch_all(&*self.pool)
+        .await?;
+
+        let total: i64 = sqlx::query_scalar(
+            "WITH accepted_chain AS (
+                SELECT
+                    uploads.user_id,
+                    uploads.level_id,
+                    LEAD(uploads.id) OVER (
+                        PARTITION BY uploads.level_id
+                        ORDER BY uploads.upload_time ASC, uploads.id ASC
+                    ) AS replacement_id
+                FROM uploads
+                WHERE uploads.accepted = TRUE AND uploads.deleted_at IS NULL
+            )
+            SELECT COUNT(*)
+            FROM accepted_chain c
+            WHERE c.user_id = $1
+            AND c.replacement_id IS NOT NULL
+            AND ($2::BIGINT IS NULL OR c.level_id = $2)
+            ",
+        )
+        .bind(user_id)
+        .bind(level_id_search)
+        .fetch_one(&*self.pool)
+        .await?;
+
+        Ok(ReplacedUploadsPage { uploads, total })
     }
 }
