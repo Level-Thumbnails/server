@@ -224,7 +224,7 @@ async fn add_to_pending(
                     json!({
                         "status": StatusCode::TOO_MANY_REQUESTS.as_u16(),
                         "message": format!(
-                            "You don't have enough film to submit this thumbnail yet. Please wait until it refills in {}.",
+                            "You don't have enough film to submit this thumbnail yet.\nPlease wait until it refills in {}.",
                             util::duration_to_human_readable(seconds_until_enough)
                         ),
                         "energy": status,
