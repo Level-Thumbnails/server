@@ -1256,7 +1256,7 @@ impl AppState {
         .await?;
 
         Ok(())
-    })
+    }
 
     pub async fn get_user_by_gd_id(&self, account_id: i64) -> Option<User> {
         sqlx::query_as::<_, User>("SELECT * FROM users WHERE account_id = $1")
