@@ -458,3 +458,26 @@ pub async fn move_file_with_dirs(src: &Path, dest: &Path) -> Result<(), std::io:
     tokio::fs::rename(src, dest).await?;
     Ok(())
 }
+
+/// Converts a duration in seconds to a human-readable string format (e.g., "1h 30m 45s").
+pub fn duration_to_human_readable(seconds: i64) -> String {
+    let hours = seconds / 3600;
+    let minutes = (seconds % 3600) / 60;
+    let seconds = seconds % 60;
+
+    let mut parts = Vec::with_capacity(3);
+
+    if hours > 0 {
+        parts.push(format!("{}h", hours));
+    }
+
+    if minutes > 0 {
+        parts.push(format!("{}m", minutes));
+    }
+
+    if seconds > 0 || parts.is_empty() {
+        parts.push(format!("{}s", seconds));
+    }
+
+    parts.join(" ")
+}

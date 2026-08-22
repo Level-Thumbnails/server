@@ -1,7 +1,8 @@
+use crate::db::{AppState, User};
 use crate::routes::thumbnail;
 use crate::util::MessageResponse;
-use crate::{cache_controller, db, util};
 use crate::webhooks::{SystemNotification, ThumbnailNotification, WebhookClient};
+use crate::{cache_controller, db, energy, util};
 use axum::Json;
 use axum::body::Bytes;
 use axum::extract::{Path, Query, State};
@@ -12,7 +13,6 @@ use serde::{Deserialize, Serialize};
 use serde_json::json;
 use std::cmp::PartialEq;
 use webp::Encoder;
-use crate::db::{AppState, User};
 
 const IMAGE_WIDTH: u32 = 1920;
 const IMAGE_HEIGHT: u32 = 1080;
@@ -127,36 +127,40 @@ async fn force_save(
     thumbnail::purge_resize_cache(id as i64).await;
 
     let _ = if replacement {
-        WebhookClient::get().send_thumb_notification(ThumbnailNotification::Replacement {
-            level_name: &submission_note.level_name,
-            level_creator: &submission_note.creator_name,
-            level_id: id as i64,
-            difficulty: submission_note.difficulty,
-            rating: submission_note.rating,
-            upload_id,
-            old_upload_id: original_upload_id,
-            created_by: &user.username,
-            created_by_role: user.role,
-            created_by_discord: user.discord_id,
-            accepted_by: &user.username,
-            accepted_by_role: user.role,
-            accepted_by_discord: user.discord_id,
-        }).await
+        WebhookClient::get()
+            .send_thumb_notification(ThumbnailNotification::Replacement {
+                level_name: &submission_note.level_name,
+                level_creator: &submission_note.creator_name,
+                level_id: id as i64,
+                difficulty: submission_note.difficulty,
+                rating: submission_note.rating,
+                upload_id,
+                old_upload_id: original_upload_id,
+                created_by: &user.username,
+                created_by_role: user.role,
+                created_by_discord: user.discord_id,
+                accepted_by: &user.username,
+                accepted_by_role: user.role,
+                accepted_by_discord: user.discord_id,
+            })
+            .await
     } else {
-        WebhookClient::get().send_thumb_notification(ThumbnailNotification::NewUpload {
-            level_name: &submission_note.level_name,
-            level_creator: &submission_note.creator_name,
-            level_id: id as i64,
-            difficulty: submission_note.difficulty,
-            rating: submission_note.rating,
-            upload_id,
-            created_by: &user.username,
-            created_by_role: user.role,
-            created_by_discord: user.discord_id,
-            accepted_by: &user.username,
-            accepted_by_role: user.role,
-            accepted_by_discord: user.discord_id,
-        }).await
+        WebhookClient::get()
+            .send_thumb_notification(ThumbnailNotification::NewUpload {
+                level_name: &submission_note.level_name,
+                level_creator: &submission_note.creator_name,
+                level_id: id as i64,
+                difficulty: submission_note.difficulty,
+                rating: submission_note.rating,
+                upload_id,
+                created_by: &user.username,
+                created_by_role: user.role,
+                created_by_discord: user.discord_id,
+                accepted_by: &user.username,
+                accepted_by_role: user.role,
+                accepted_by_discord: user.discord_id,
+            })
+            .await
     };
 
     Ok(())
@@ -177,6 +181,65 @@ async fn add_to_pending(
         );
     }
 
+    let already_pending = match db.has_pending_upload_for(user.id, id as i64).await {
+        Ok(v) => v,
+        Err(e) => {
+            return util::str_response(
+                StatusCode::INTERNAL_SERVER_ERROR,
+                &format!("Failed to check pending uploads: {}", e),
+            );
+        }
+    };
+
+    let cost_millipoints: i32;
+    {
+        let settings = db.settings.read().await;
+        let energy_config = &settings.energy_config;
+
+        if !energy_config.enabled || already_pending {
+            cost_millipoints = 0;
+        } else {
+            cost_millipoints = energy::calculate_submission_cost(
+                &submission_note,
+                submission_note.creator_id == user.account_id,
+                energy_config,
+            );
+        }
+    }
+
+    if cost_millipoints > 0 {
+        match db.try_spend_energy(user.id, cost_millipoints, None).await {
+            Ok(Some(_)) => {}
+            Ok(None) => {
+                let status = db.get_user_energy(user.id).await.unwrap_or_default();
+                let seconds_until_enough = {
+                    let need = cost_millipoints - status.current_energy;
+                    let refill_rate_per_second = status.refill_rate as f32 / 3600.0;
+                    (need as f32 / refill_rate_per_second).ceil() as i64
+                };
+
+                return util::response(
+                    StatusCode::TOO_MANY_REQUESTS,
+                    json!({
+                        "status": StatusCode::TOO_MANY_REQUESTS.as_u16(),
+                        "message": format!(
+                            "You don't have enough film to submit this thumbnail yet. Please wait until it refills in {}.",
+                            util::duration_to_human_readable(seconds_until_enough)
+                        ),
+                        "energy": status,
+                        "cost": cost_millipoints
+                    }),
+                );
+            }
+            Err(e) => {
+                return util::str_response(
+                    StatusCode::INTERNAL_SERVER_ERROR,
+                    &format!("Failed to check energy: {}", e),
+                );
+            }
+        }
+    }
+
     match db.add_upload(id as i64, user.id, "", false, submission_note).await {
         Ok(upload_id) => {
             let image_path = util::get_upload_path(upload_id);
@@ -191,9 +254,15 @@ async fn add_to_pending(
                 }
             }
 
-            util::str_response(
+            let status = db.get_user_energy(user.id).await;
+            util::response(
                 StatusCode::ACCEPTED,
-                &format!("Image for level ID {} is now pending", id),
+                json!({
+                    "status": StatusCode::ACCEPTED.as_u16(),
+                    "message": format!("Image for level ID {} is now pending", id),
+                    "cost": cost_millipoints,
+                    "energy": status
+                }),
             )
         }
         Err(e) => util::str_response(
@@ -314,7 +383,9 @@ pub async fn upload(
     let webp_data = match tokio::task::spawn_blocking(move || process_image(&data)).await {
         Ok(Ok(data)) => data,
         Ok(Err(e)) => return util::str_response(StatusCode::BAD_REQUEST, &e),
-        Err(_) => return util::str_response(StatusCode::INTERNAL_SERVER_ERROR, "Image processing failed"),
+        Err(_) => {
+            return util::str_response(StatusCode::INTERNAL_SERVER_ERROR, "Image processing failed");
+        }
     };
 
     if user.role.can_upload_replacement_directly() {
@@ -332,15 +403,22 @@ pub async fn upload(
     }
 }
 
-async fn handle_force_save(db: &AppState, id: u64, user: &User, note: NoteData, webp_data: &Vec<u8>, replacement: bool) -> Response {
+async fn handle_force_save(
+    db: &AppState,
+    id: u64,
+    user: &User,
+    note: NoteData,
+    webp_data: &Vec<u8>,
+    replacement: bool,
+) -> Response {
     match force_save(id, &webp_data, note, &user, &db, replacement).await {
         Ok(_) => util::str_response(
             StatusCode::CREATED,
-            &format!("Image for level ID {} {}", id, if replacement{
-                "replaced"
-            } else {
-                "uploaded"
-            }),
+            &format!(
+                "Image for level ID {} {}",
+                id,
+                if replacement { "replaced" } else { "uploaded" }
+            ),
         ),
         Err(e) => util::str_response(
             StatusCode::INTERNAL_SERVER_ERROR,
@@ -621,36 +699,40 @@ pub async fn pending_action(
 
         if let Some(notes) = upload.note_data {
             let _ = if is_replacement {
-                WebhookClient::get().send_thumb_notification(ThumbnailNotification::Replacement {
-                    level_name: &notes.level_name,
-                    level_creator: &notes.creator_name,
-                    level_id: upload.level_id,
-                    difficulty: notes.difficulty,
-                    rating: notes.rating,
-                    upload_id: upload.id,
-                    old_upload_id: original_upload_id,
-                    created_by: &upload.username,
-                    created_by_role: upload.user_role,
-                    created_by_discord: upload.discord_id,
-                    accepted_by: &user.username,
-                    accepted_by_role: user.role,
-                    accepted_by_discord: user.discord_id,
-                }).await
+                WebhookClient::get()
+                    .send_thumb_notification(ThumbnailNotification::Replacement {
+                        level_name: &notes.level_name,
+                        level_creator: &notes.creator_name,
+                        level_id: upload.level_id,
+                        difficulty: notes.difficulty,
+                        rating: notes.rating,
+                        upload_id: upload.id,
+                        old_upload_id: original_upload_id,
+                        created_by: &upload.username,
+                        created_by_role: upload.user_role,
+                        created_by_discord: upload.discord_id,
+                        accepted_by: &user.username,
+                        accepted_by_role: user.role,
+                        accepted_by_discord: user.discord_id,
+                    })
+                    .await
             } else {
-                WebhookClient::get().send_thumb_notification(ThumbnailNotification::NewUpload {
-                    level_name: &notes.level_name,
-                    level_creator: &notes.creator_name,
-                    level_id: upload.level_id,
-                    difficulty: notes.difficulty,
-                    rating: notes.rating,
-                    upload_id: upload.id,
-                    created_by: &upload.username,
-                    created_by_role: upload.user_role,
-                    created_by_discord: upload.discord_id,
-                    accepted_by: &user.username,
-                    accepted_by_role: user.role,
-                    accepted_by_discord: user.discord_id,
-                }).await
+                WebhookClient::get()
+                    .send_thumb_notification(ThumbnailNotification::NewUpload {
+                        level_name: &notes.level_name,
+                        level_creator: &notes.creator_name,
+                        level_id: upload.level_id,
+                        difficulty: notes.difficulty,
+                        rating: notes.rating,
+                        upload_id: upload.id,
+                        created_by: &upload.username,
+                        created_by_role: upload.user_role,
+                        created_by_discord: upload.discord_id,
+                        accepted_by: &user.username,
+                        accepted_by_role: user.role,
+                        accepted_by_discord: user.discord_id,
+                    })
+                    .await
             };
         }
 
@@ -668,10 +750,7 @@ pub async fn pending_action(
     }
 }
 
-pub async fn get_pending_image(
-    State(db): State<db::AppState>,
-    Path(id): Path<i64>,
-) -> Response {
+pub async fn get_pending_image(State(db): State<db::AppState>, Path(id): Path<i64>) -> Response {
     match db.get_pending_upload(id).await {
         Ok(upload) => upload,
         Err(e) => {
@@ -695,10 +774,7 @@ pub async fn get_pending_image(
 
     Response::builder()
         .header(header::CONTENT_TYPE, "image/webp")
-        .header(
-            header::CONTENT_DISPOSITION,
-            format!("inline; filename=\"upload_{}.webp\"", id),
-        )
+        .header(header::CONTENT_DISPOSITION, format!("inline; filename=\"upload_{}.webp\"", id))
         .header(header::CACHE_CONTROL, "public, max-age=31536000, immutable")
         .header(header::CONTENT_LENGTH, image_data.len())
         .body(image_data.into())
@@ -806,21 +882,21 @@ pub async fn lock_level(
 
     match db.lock_level(id, user.id, payload.reason.as_deref()).await {
         Ok(_) => {
-            let _ = WebhookClient::get().send_system_notification(
-                SystemNotification::LevelLocked {
+            let _ = WebhookClient::get()
+                .send_system_notification(SystemNotification::LevelLocked {
                     level_id: id,
                     reason: payload.reason.as_deref(),
                     by_username: &user.username,
                     by_role: user.role,
                     by_discord: user.discord_id,
-                },
-            ).await;
+                })
+                .await;
 
             util::str_response(
                 StatusCode::OK,
                 &format!("Level {} is now locked for submissions", id),
             )
-        },
+        }
         Err(e) => util::str_response(
             StatusCode::INTERNAL_SERVER_ERROR,
             &format!("Failed to lock level {}: {}", id, e),
@@ -888,20 +964,20 @@ pub async fn unlock_level(
 
     match db.unlock_level(id).await {
         Ok(true) => {
-            let _ = WebhookClient::get().send_system_notification(
-                SystemNotification::LevelUnlocked {
+            let _ = WebhookClient::get()
+                .send_system_notification(SystemNotification::LevelUnlocked {
                     level_id: id,
                     by_username: &user.username,
                     by_role: user.role,
                     by_discord: user.discord_id,
-                },
-            ).await;
+                })
+                .await;
 
             util::str_response(
                 StatusCode::OK,
                 &format!("Level {} is now unlocked for submissions", id),
             )
-        },
+        }
         Ok(false) => util::str_response(StatusCode::NOT_FOUND, "Level lock not found"),
         Err(e) => util::str_response(
             StatusCode::INTERNAL_SERVER_ERROR,

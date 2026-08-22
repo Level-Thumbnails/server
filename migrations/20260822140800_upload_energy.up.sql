@@ -1,0 +1,14 @@
+ALTER TABLE users
+    ADD COLUMN IF NOT EXISTS energy_millipoints INT NOT NULL DEFAULT 5000,
+    ADD COLUMN IF NOT EXISTS energy_updated_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP;
+
+CREATE TABLE IF NOT EXISTS energy_audit
+(
+    id BIGSERIAL PRIMARY KEY,
+    user_id BIGINT NOT NULL REFERENCES users (id) ON DELETE CASCADE,
+    delta_millipoints INT NOT NULL,
+    upload_id BIGINT REFERENCES uploads (id) ON DELETE SET NULL,
+    created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP
+);
+
+CREATE INDEX IF NOT EXISTS idx_energy_audit_user_id ON energy_audit (user_id, created_at DESC);

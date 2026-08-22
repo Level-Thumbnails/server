@@ -3,7 +3,7 @@ use crate::db::filters::{
 };
 use crate::db::{
     ActiveUpload, ActiveUploadsPage, AdminUserQueryOptions, AdminUserRow, AdminUsersPage, AppState,
-    BadgeLists, LevelLock, MAX_MY_UPLOADS_PAGE_SIZE, MyUploadsSummary, NoteData,
+    BadgeLists, EnergyStats, LevelLock, MAX_MY_UPLOADS_PAGE_SIZE, MyUploadsSummary, NoteData,
     PENDING_UPLOAD_SELECT, PendingQueryOptions, PendingUpload, PendingUploadsPage, RejectedUpload,
     RejectedUploadsPage, ReplacedUpload, ReplacedUploadsPage, Settings, StatsSnapshot,
     USER_STATS_CTE, UpdateUserOptions, UploadExtended, UploadInfo, User, UserBan, UserHistoryPoint,
@@ -661,6 +661,25 @@ impl AppState {
         Ok(upload_id)
     }
 
+    pub async fn has_pending_upload_for(
+        &self,
+        user_id: i64,
+        level_id: i64,
+    ) -> Result<bool, sqlx::Error> {
+        let exists: bool = sqlx::query_scalar(
+            "SELECT EXISTS (
+                SELECT 1 FROM uploads
+                WHERE user_id = $1 AND level_id = $2 AND accepted = FALSE AND accepted_time IS NULL
+            )",
+        )
+        .bind(user_id)
+        .bind(level_id)
+        .fetch_one(&*self.pool)
+        .await?;
+
+        Ok(exists)
+    }
+
     pub async fn get_pending_uploads_paginated(
         &self,
         options: PendingQueryOptions,
@@ -924,10 +943,10 @@ impl AppState {
               AND c.replacement_id IS NOT NULL
               AND c.level_id = $2",
             )
-                .bind(user_id)
-                .bind(level_id)
-                .fetch_one(&*self.pool)
-                .await?
+            .bind(user_id)
+            .bind(level_id)
+            .fetch_one(&*self.pool)
+            .await?
         } else {
             sqlx::query_scalar(
                 "WITH accepted_chain AS (
@@ -945,9 +964,9 @@ impl AppState {
             WHERE c.user_id = $1
               AND c.replacement_id IS NOT NULL",
             )
-                .bind(user_id)
-                .fetch_one(&*self.pool)
-                .await?
+            .bind(user_id)
+            .fetch_one(&*self.pool)
+            .await?
         };
 
         let rejected = if let Some(level_id) = level_id_search {
@@ -978,7 +997,12 @@ impl AppState {
             .await?
         };
 
-        Ok(MyUploadsSummary { active, pending, replaced, rejected })
+        Ok(MyUploadsSummary {
+            active,
+            pending,
+            replaced,
+            rejected,
+        })
     }
 
     pub async fn get_pending_upload(&self, id: i64) -> Result<PendingUpload, sqlx::Error> {
@@ -1053,6 +1077,35 @@ impl AppState {
     }
 
     pub async fn get_user_stats(&self, id: i64) -> Option<UserStats> {
+        let current_energy: i32;
+        let seconds_until_full: Option<i64>;
+
+        {
+            let settings = self.settings.read().await;
+            let config = &settings.energy_config;
+
+            current_energy = sqlx::query_scalar(
+                "SELECT LEAST($2, energy_millipoints + FLOOR(
+                    EXTRACT(EPOCH FROM (NOW() - energy_updated_at)) / 3600.0 * $3
+                )::INT) FROM users WHERE id = $1",
+            )
+            .bind(id)
+            .bind(config.max_millipoints)
+            .bind(config.refill_rate)
+            .fetch_one(&*self.pool)
+            .await
+            .ok()?;
+
+            seconds_until_full =
+                if current_energy >= config.max_millipoints || config.refill_rate <= 0 {
+                    None
+                } else {
+                    let missing = (config.max_millipoints - current_energy) as f64;
+                    let hours = missing / config.refill_rate as f64;
+                    Some((hours * 3600.0).ceil() as i64)
+                }
+        }
+
         sqlx::query_as::<_, UserStats>(
             "SELECT
                 users.id, users.account_id,
@@ -1078,16 +1131,112 @@ impl AppState {
                               AND u2.deleted_at IS NULL
                           )
                     ) active_levels
-                ) AS active_thumbnail_count
+                ) AS active_thumbnail_count,
+                $2 AS energy_left,
+                $3 AS energy_refill_time
              FROM users
              LEFT JOIN uploads ON users.id = uploads.user_id
              WHERE users.id = $1
              GROUP BY users.id, users.account_id, users.username, users.role",
         )
             .bind(id)
+            .bind(current_energy)
+            .bind(seconds_until_full)
             .fetch_optional(&*self.pool)
             .await
             .ok()?
+    }
+
+    pub async fn get_user_energy(&self, user_id: i64) -> Option<EnergyStats> {
+        let max_millipoints: i32;
+        let refill_rate: i32;
+        {
+            let settings = self.settings.read().await;
+            let config = &settings.energy_config;
+            max_millipoints = config.max_millipoints;
+            refill_rate = config.refill_rate;
+        }
+
+        let current_energy: i32 = sqlx::query_scalar(
+            "SELECT
+                LEAST($2, energy_millipoints + FLOOR(
+                    EXTRACT(EPOCH FROM (NOW() - energy_updated_at)) / 3600.0 * $3
+                )::INT) AS current_energy
+             FROM users
+             WHERE id = $1",
+        )
+        .bind(user_id)
+        .bind(max_millipoints)
+        .bind(refill_rate)
+        .fetch_optional(&*self.pool)
+        .await
+        .ok()?
+        .unwrap_or(0);
+
+        let seconds_until_full = if current_energy >= max_millipoints || refill_rate <= 0 {
+            None
+        } else {
+            let missing = (max_millipoints - current_energy) as f64;
+            let hours = missing / refill_rate as f64;
+            Some((hours * 3600.0).ceil() as i64)
+        };
+
+        Some(EnergyStats {
+            current_energy,
+            max_energy: max_millipoints,
+            refill_rate,
+            seconds_until_full,
+        })
+    }
+
+    pub async fn try_spend_energy(
+        &self,
+        user_id: i64,
+        amount: i32,
+        upload_id: Option<i64>,
+    ) -> Result<Option<i32>, sqlx::Error> {
+        let max_millipoints: i32;
+        let refill_rate: i32;
+        {
+            let settings = self.settings.read().await;
+            let config = &settings.energy_config;
+            max_millipoints = config.max_millipoints;
+            refill_rate = config.refill_rate;
+        }
+
+        let new_balance: Option<i32> = sqlx::query_scalar(
+            "UPDATE users
+            SET energy_millipoints = LEAST($2, energy_millipoints + FLOOR(
+                    EXTRACT(EPOCH FROM (NOW() - energy_updated_at)) / 3600.0 * $3
+                )::INT) - $4,
+                energy_updated_at = NOW()
+            WHERE id = $1 AND LEAST($2, energy_millipoints + FLOOR(
+                    EXTRACT(EPOCH FROM (NOW() - energy_updated_at)) / 3600.0 * $3
+                )::INT) >= $4
+            RETURNING energy_millipoints",
+        )
+        .bind(user_id)
+        .bind(max_millipoints)
+        .bind(refill_rate)
+        .bind(amount)
+        .fetch_optional(&*self.pool)
+        .await?;
+
+        if let Some(new_energy) = new_balance {
+            sqlx::query(
+                "INSERT INTO energy_audit (user_id, delta_millipoints, upload_id)
+                VALUES ($1, $2, $3)",
+            )
+            .bind(user_id)
+            .bind(-amount)
+            .bind(upload_id)
+            .execute(&*self.pool)
+            .await?;
+
+            Ok(Some(new_energy))
+        } else {
+            Ok(None)
+        }
     }
 
     pub async fn get_user_by_gd_id(&self, account_id: i64) -> Option<User> {

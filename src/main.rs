@@ -18,6 +18,7 @@ pub mod db;
 mod routes;
 mod util;
 mod webhooks;
+mod energy;
 
 use routes::{admin, login, stats, thumbnail, upload, user};
 use webhooks::SystemNotification::ServerRestart;

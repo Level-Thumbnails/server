@@ -6,6 +6,7 @@ use axum::extract::{Path, Query, State};
 use axum::http::{HeaderMap, StatusCode};
 use axum::response::Response;
 use serde::Deserialize;
+use crate::energy::EnergyConfig;
 use crate::webhooks::{GlobalNotification, SystemNotification, WebhookClient};
 
 const DEFAULT_ADMIN_USER_PAGE_SIZE: u32 = 50;
@@ -57,6 +58,7 @@ pub async fn get_settings(headers: HeaderMap, State(db): State<db::AppState>) ->
 pub struct UpdateSettingsPayload {
     pub pause_submissions: bool,
     pub min_supported_client: String,
+    pub energy_config: EnergyConfig,
     pub stealth: Option<bool> // whether to hide global notification, defaults to false
 }
 
@@ -83,6 +85,7 @@ pub async fn update_settings(
                             );
                         }
                     };
+                settings.energy_config = payload.energy_config;
             }
 
             match db.save_settings().await {

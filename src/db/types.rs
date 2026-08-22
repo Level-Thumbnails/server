@@ -1,5 +1,6 @@
 use crate::util::VersionInfo;
 use serde::{Deserialize, Serialize};
+use crate::energy::EnergyConfig;
 
 pub fn default_min_supported_client() -> VersionInfo {
     VersionInfo::from_str("v2.1.0").expect("Invalid default version")
@@ -11,6 +12,8 @@ pub struct Settings {
     pub pause_submissions: bool,
     #[serde(default = "default_min_supported_client")]
     pub min_supported_client: VersionInfo,
+    #[serde(default)]
+    pub energy_config: EnergyConfig,
 }
 
 impl Default for Settings {
@@ -18,6 +21,7 @@ impl Default for Settings {
         Self {
             pause_submissions: false,
             min_supported_client: default_min_supported_client(),
+            energy_config: EnergyConfig::default(),
         }
     }
 }

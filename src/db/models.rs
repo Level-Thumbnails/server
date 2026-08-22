@@ -258,6 +258,16 @@ pub struct UserStats {
     pub level_count: i64,
     pub accepted_level_count: i64,
     pub active_thumbnail_count: i64,
+    pub energy_left: i32,
+    pub energy_refill_time: Option<i64>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+pub struct EnergyStats {
+    pub current_energy: i32,
+    pub max_energy: i32,
+    pub refill_rate: i32,
+    pub seconds_until_full: Option<i64>,
 }
 
 #[derive(FromRow, Serialize, Deserialize)]
