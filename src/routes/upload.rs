@@ -259,6 +259,10 @@ async fn add_to_pending(
                 let _ = db.update_energy_audit_upload_id(audit_id, upload_id).await;
             }
 
+            if already_pending {
+                let _ = cache_controller::purge_pending(upload_id);
+            }
+
             let status = db.get_user_energy(user.id).await;
             util::response(
                 StatusCode::ACCEPTED,

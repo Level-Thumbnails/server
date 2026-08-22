@@ -98,6 +98,37 @@ impl CloudflareClient {
         }
     }
 
+    pub async fn purge_pending(&self, upload_id: i64) -> Result<(), PurgeError> {
+        let urls = [
+            format!("{}/pending/{}/image", self.root_url, upload_id),
+        ];
+
+        let endpoint =
+            format!("https://api.cloudflare.com/client/v4/zones/{}/purge_cache", self.zone_id);
+
+        let payload = serde_json::json!({ "files": urls });
+        let response =
+            self.client.post(&endpoint).bearer_auth(&self.api_token).json(&payload).send().await;
+
+        let response = match response {
+            Ok(resp) => resp,
+            Err(e) => {
+                return Err(PurgeError {
+                    status: reqwest::StatusCode::INTERNAL_SERVER_ERROR,
+                    body: e.to_string(),
+                });
+            }
+        };
+
+        if response.status().is_success() {
+            Ok(())
+        } else {
+            let status = response.status();
+            let text = response.text().await.unwrap_or_default();
+            Err(PurgeError { status, body: text })
+        }
+    }
+
     pub async fn get_user_stats(&self) -> Result<u64, String> {
         let stale_cached_value = {
             let cache = self.user_stats_cache.read().await;
@@ -234,6 +265,14 @@ pub fn purge(level_id: i64) {
             }
         }
     });
+}
+
+pub fn purge_pending(upload_id: i64) {
+    if dotenv::var("CLOUDFLARE_API_KEY").is_err() {
+        return;
+    }
+
+    tokio::spawn(CloudflareClient::get().purge_pending(upload_id));
 }
 
 pub async fn get_user_stats() -> Result<u64, String> {
