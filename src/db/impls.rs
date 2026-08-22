@@ -1194,7 +1194,7 @@ impl AppState {
         user_id: i64,
         amount: i32,
         upload_id: Option<i64>,
-    ) -> Result<Option<i32>, sqlx::Error> {
+    ) -> Result<Option<(i32, i64)>, sqlx::Error> {
         let max_millipoints: i32;
         let refill_rate: i32;
         {
@@ -1223,21 +1223,40 @@ impl AppState {
         .await?;
 
         if let Some(new_energy) = new_balance {
-            sqlx::query(
+            let audit_id: i64 = sqlx::query_scalar(
                 "INSERT INTO energy_audit (user_id, delta_millipoints, upload_id)
-                VALUES ($1, $2, $3)",
+                VALUES ($1, $2, $3)
+                RETURNING id",
             )
             .bind(user_id)
             .bind(-amount)
             .bind(upload_id)
-            .execute(&*self.pool)
+            .fetch_one(&*self.pool)
             .await?;
 
-            Ok(Some(new_energy))
+            Ok(Some((new_energy, audit_id)))
         } else {
             Ok(None)
         }
     }
+
+    pub async fn update_energy_audit_upload_id(
+        &self,
+        audit_id: i64,
+        upload_id: i64,
+    ) -> Result<(), sqlx::Error> {
+        sqlx::query(
+            "UPDATE energy_audit
+            SET upload_id = $2
+            WHERE id = $1",
+        )
+        .bind(audit_id)
+        .bind(upload_id)
+        .execute(&*self.pool)
+        .await?;
+
+        Ok(())
+    })
 
     pub async fn get_user_by_gd_id(&self, account_id: i64) -> Option<User> {
         sqlx::query_as::<_, User>("SELECT * FROM users WHERE account_id = $1")

@@ -207,9 +207,10 @@ async fn add_to_pending(
         }
     }
 
+    let mut audit_id: Option<i64> = None;
     if cost_millipoints > 0 {
         match db.try_spend_energy(user.id, cost_millipoints, None).await {
-            Ok(Some(_)) => {}
+            Ok(Some((_, id))) => audit_id = Some(id),
             Ok(None) => {
                 let status = db.get_user_energy(user.id).await.unwrap_or_default();
                 let seconds_until_enough = {
@@ -252,6 +253,10 @@ async fn add_to_pending(
                         &format!("Failed to save pending image: {}", e),
                     );
                 }
+            }
+
+            if let Some(audit_id) = audit_id {
+                let _ = db.update_energy_audit_upload_id(audit_id, upload_id).await;
             }
 
             let status = db.get_user_energy(user.id).await;
