@@ -196,7 +196,7 @@ async fn add_to_pending(
         let settings = db.settings.read().await;
         let energy_config = &settings.energy_config;
 
-        if !energy_config.enabled || already_pending {
+        if !energy_config.enabled || already_pending || user.role.can_upload_without_energy() {
             cost_millipoints = 0;
         } else {
             cost_millipoints = energy::calculate_submission_cost(

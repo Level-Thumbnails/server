@@ -36,6 +36,7 @@ pub enum Permission {
     ManageLevelLocks,
     ManageSettings,
     SubmitDuringLevelLocks,
+    UploadWithoutSpendingEnergy,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize, Serialize, sqlx::Type)]
@@ -97,6 +98,9 @@ impl Role {
             Permission::SubmitDuringLevelLocks => {
                 matches!(self, Role::Verified | Role::Moderator | Role::Admin | Role::Owner)
             }
+            Permission::UploadWithoutSpendingEnergy => {
+                matches!(self, Role::Verified | Role::Moderator | Role::Admin | Role::Owner)
+            }
         }
     }
 
@@ -140,6 +144,10 @@ impl Role {
     
     pub fn can_add_to_queue_during_locks(self) -> bool {
         self.has_permission(Permission::SubmitDuringLevelLocks)
+    }
+
+    pub fn can_upload_without_energy(self) -> bool {
+        self.has_permission(Permission::UploadWithoutSpendingEnergy)
     }
 }
 
