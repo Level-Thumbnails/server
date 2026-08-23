@@ -176,8 +176,8 @@ async fn add_to_pending(
     if !user.role.can_add_to_queue_during_locks() && db.settings.read().await.pause_submissions {
         return util::str_response(
             StatusCode::SERVICE_UNAVAILABLE,
-            "Thumbnail submissions are currently closed because there are too many submissions. \
-            Please wait for thumbnail moderators to clear the queue, and then submissions will reopen.",
+            "Thumbnail submissions are currently <cr>closed</c> because there are <cr>too many submissions</c>.\n\
+            Please <cy>wait</c> for thumbnail moderators to clear the queue, and then submissions will reopen.",
         );
     }
 
@@ -224,7 +224,7 @@ async fn add_to_pending(
                     json!({
                         "status": StatusCode::TOO_MANY_REQUESTS.as_u16(),
                         "message": format!(
-                            "You don't have enough film to submit this thumbnail yet.\nPlease wait until it refills in {}.",
+                            "You don't have enough <cb>film</c> to submit this thumbnail yet.\nPlease <co>wait until it refills</c> in <cy>{}</c>.",
                             util::duration_to_human_readable(seconds_until_enough)
                         ),
                         "energy": status,
@@ -306,7 +306,7 @@ pub async fn upload(
                         "status": StatusCode::FORBIDDEN.as_u16(),
                         // TODO: remove the reason from message once the mod actually reads the "reason" field
                         "message": format!(
-                            "You are banned from uploading thumbnails until {}. Reason: {}",
+                            "You are <cr>banned</c> from uploading thumbnails until <co>{}</c>. Reason: <cy>{}</c>",
                             expires_at.format("%Y-%m-%d %H:%M:%S").to_string(),
                             ban.reason
                         ),
@@ -320,7 +320,7 @@ pub async fn upload(
                     json!({
                         "status": StatusCode::FORBIDDEN.as_u16(),
                         // TODO: remove the reason from message once the mod actually reads the "reason" field
-                        "message": format!("You are banned from uploading thumbnails. Reason: {}", ban.reason),
+                        "message": format!("You are <cr>banned</c> from uploading thumbnails. Reason: <cy>{}</c>", ban.reason),
                         "reason": ban.reason,
                     }),
                 )
@@ -341,7 +341,7 @@ pub async fn upload(
                 return util::str_response(
                     StatusCode::UPGRADE_REQUIRED,
                     &format!(
-                        "Your Level Thumbnails version ({}) is outdated. Please update to the latest version to upload thumbnails.",
+                        "Your Level Thumbnails version ({}) is <co>outdated</c>.\nPlease <cy>update</c> to the latest version to upload thumbnails.",
                         ua.version
                     ),
                 );
@@ -351,7 +351,7 @@ pub async fn upload(
         None => {
             return util::str_response(
                 StatusCode::UPGRADE_REQUIRED,
-                "Your game version is not supported. Please update Geometry Dash and install the latest version of Level Thumbnails mod.",
+                "Your game version is <cr>not supported</c>. Please <cy>update Geometry Dash</c> and install the latest version of Level Thumbnails mod.",
             );
         }
     };
@@ -373,7 +373,7 @@ pub async fn upload(
                     StatusCode::LOCKED,
                     json!({
                         "status": 423,
-                        "message": "Thumbnail submissions are locked for this level",
+                        "message": "Thumbnail submissions are <cr>locked</c> for this level",
                         "reason": lock.reason
                     }),
                 );
