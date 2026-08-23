@@ -30,7 +30,7 @@ fn handle_verdict_error(verdict: auth::Verdict) -> Response {
         StatusCode::UNAUTHORIZED,
         json!({
             "status": StatusCode::UNAUTHORIZED.as_u16(),
-            "error": "Authentication failed",
+            "message": "Authentication failed",
             "details": details,
         }),
     )
@@ -49,7 +49,7 @@ pub async fn login(State(db): State<db::AppState>, Json(payload): Json<LoginPayl
                 StatusCode::INTERNAL_SERVER_ERROR,
                 json!({
                     "status": StatusCode::INTERNAL_SERVER_ERROR.as_u16(),
-                    "error": "Argon verification failed",
+                    "message": "Argon verification failed",
                     "details": e.to_string(),
                 }),
             );
@@ -75,7 +75,7 @@ pub async fn login(State(db): State<db::AppState>, Json(payload): Json<LoginPayl
                         StatusCode::INTERNAL_SERVER_ERROR,
                         json!({
                             "status": StatusCode::INTERNAL_SERVER_ERROR.as_u16(),
-                            "error": "Database error",
+                            "message": "Database error during login",
                             "details": e.to_string(),
                         }),
                     )
