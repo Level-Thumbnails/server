@@ -228,7 +228,7 @@ pub struct LevelStatsQueryParams {
     pub period: Option<LevelStatsPeriod>,
 }
 
-const TOP_LEVELS_LIMIT: i64 = 10;
+const TOP_LEVELS_LIMIT: i64 = 25;
 
 pub async fn get_level_stats(
     Query(params): Query<LevelStatsQueryParams>,
