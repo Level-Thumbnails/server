@@ -139,9 +139,15 @@ async fn main() {
         stats_snapshot_loop(snapshot_db).await;
     });
 
+    let level_stats_db = db.clone();
+    tokio::spawn(async move {
+        level_stats_loop(level_stats_db).await;
+    });
+
     let app = Router::new()
         .route("/stats", get(stats::get_stats))
         .route("/stats/history", get(stats::get_stats_history))
+        .route("/stats/levels", get(stats::get_level_stats))
         // /thumbnail
         .route("/thumbnail/locks", get(upload::get_all_level_locks))
         .route("/thumbnail/{id}/lock", get(upload::get_level_lock))
@@ -273,4 +279,72 @@ async fn create_stats_snapshot(db: &db::AppState) -> Result<(), String> {
     db.create_stats_snapshot(storage_size as i64, thumbnails_count as i64, users_per_month)
         .await
         .map_err(|e| format!("Failed to write stats snapshot: {}", e))
+}
+
+const LEVEL_STATS_BACKFILL_DAYS: i64 = 7;
+const LEVEL_STATS_CHECK_INTERVAL: Duration = Duration::from_secs(60 * 60);
+
+async fn level_stats_loop(db: db::AppState) {
+    if !cache_controller::is_configured() {
+        warn!("Cloudflare is not configured, not collecting level stats");
+        return;
+    }
+
+    backfill_level_stats(&db).await;
+
+    loop {
+        if let Err(e) = collect_level_stats_for_yesterday(&db).await {
+            warn!("Failed to collect level stats: {}", e);
+        }
+
+        sleep(LEVEL_STATS_CHECK_INTERVAL).await;
+    }
+}
+
+async fn backfill_level_stats(db: &db::AppState) {
+    let today = chrono::Utc::now().date_naive();
+
+    for offset in 1..=LEVEL_STATS_BACKFILL_DAYS {
+        let date = today - chrono::Duration::days(offset);
+
+        match db.has_collected_level_stats(date).await {
+            Ok(true) => continue,
+            Ok(false) => {}
+            Err(e) => {
+                warn!("Failed to check level stats collection status for {}: {}", date, e);
+                continue;
+            }
+        }
+
+        if let Err(e) = collect_level_stats_for_date(db, date).await {
+            warn!("Failed to backfill level stats for {}: {}", date, e);
+        }
+
+        sleep(Duration::from_millis(500)).await;
+    }
+}
+
+async fn collect_level_stats_for_yesterday(db: &db::AppState) -> Result<(), String> {
+    let yesterday = chrono::Utc::now().date_naive() - chrono::Duration::days(1);
+
+    let already_collected =
+        db.has_collected_level_stats(yesterday).await.map_err(|e| e.to_string())?;
+    if already_collected {
+        return Ok(());
+    }
+
+    collect_level_stats_for_date(db, yesterday).await
+}
+
+async fn collect_level_stats_for_date(
+    db: &db::AppState,
+    date: chrono::NaiveDate,
+) -> Result<(), String> {
+    let stats = cache_controller::CloudflareClient::get().fetch_top_paths_for_day(date).await?;
+    let level_count = stats.len();
+
+    db.store_level_daily_stats(date, &stats).await.map_err(|e| e.to_string())?;
+
+    info!("Collected level stats for {}: {} levels", date, level_count);
+    Ok(())
 }

@@ -212,3 +212,48 @@ pub async fn get_stats_history(
         ),
     }
 }
+
+#[derive(Debug, Deserialize)]
+pub enum LevelStatsPeriod {
+    #[serde(rename = "day")]
+    Day,
+    #[serde(rename = "week")]
+    Week,
+    #[serde(rename = "month")]
+    Month,
+}
+
+#[derive(Debug, Deserialize)]
+pub struct LevelStatsQueryParams {
+    pub period: Option<LevelStatsPeriod>,
+}
+
+const TOP_LEVELS_LIMIT: i64 = 10;
+
+pub async fn get_level_stats(
+    Query(params): Query<LevelStatsQueryParams>,
+    State(db): State<db::AppState>,
+) -> Response {
+    let days = match params.period {
+        Some(LevelStatsPeriod::Day) => 1,
+        Some(LevelStatsPeriod::Week) => 7,
+        Some(LevelStatsPeriod::Month) => 30,
+        None => 1,
+    };
+
+    let since = chrono::Utc::now().date_naive() - chrono::Duration::days(days);
+
+    match db.get_top_levels(since, TOP_LEVELS_LIMIT).await {
+        Ok(top_levels) => util::response(
+            StatusCode::OK,
+            serde_json::json!({
+                "status": StatusCode::OK.as_u16(),
+                "data": top_levels,
+            }),
+        ),
+        Err(e) => util::str_response(
+            StatusCode::INTERNAL_SERVER_ERROR,
+            &format!("Failed to fetch level stats: {}", e),
+        ),
+    }
+}

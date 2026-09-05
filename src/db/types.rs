@@ -141,7 +141,7 @@ impl Role {
     pub fn can_upload_replacement_directly(self) -> bool {
         self.has_permission(Permission::DirectUploadReplacement)
     }
-    
+
     pub fn can_add_to_queue_during_locks(self) -> bool {
         self.has_permission(Permission::SubmitDuringLevelLocks)
     }

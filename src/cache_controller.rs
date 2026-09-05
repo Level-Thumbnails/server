@@ -1,10 +1,12 @@
 use std::time::{Duration, Instant};
+use chrono::NaiveDate;
 use tokio::sync::RwLock;
 use tracing::{error, info, warn};
+use crate::db::TopLevelStat;
 
 const CACHE_TTL: Duration = Duration::from_secs(3600);
 
-struct CloudflareClient {
+pub(crate) struct CloudflareClient {
     api_token: String,
     zone_id: String,
     root_url: String,
@@ -230,6 +232,90 @@ impl CloudflareClient {
 
         Ok(total)
     }
+
+    pub async fn fetch_top_paths_for_day(&self, date: NaiveDate) -> Result<Vec<TopLevelStat>, String> {
+        let since = date
+            .and_hms_opt(0, 0, 0)
+            .ok_or("Invalid date")?
+            .and_utc()
+            .format("%Y-%m-%dT%H:%M:%SZ")
+            .to_string();
+
+        let until = (date + chrono::Duration::days(1))
+            .and_hms_opt(0, 0, 0)
+            .ok_or("Invalid date")?
+            .and_utc()
+            .format("%Y-%m-%dT%H:%M:%SZ")
+            .to_string();
+
+        let query = "query ($zoneTag: string, $since: Time!, $until: Time!) { \
+            viewer { \
+                zones(filter: { zoneTag: $zoneTag }) { \
+                    httpRequestsAdaptiveGroups( \
+                        limit: 10000, \
+                        filter: { \
+                            datetime_geq: $since, \
+                            datetime_lt: $until, \
+                            requestSource: \"eyeball\", \
+                            clientRequestPath_like: \"/thumbnail/%/small\" \
+                        }, \
+                        orderBy: [count_DESC] \
+                    ) { \
+                        count \
+                        dimensions { clientRequestPath } \
+                    } \
+                } \
+            } \
+        }";
+
+        let payload = serde_json::json!({
+            "query": query,
+            "variables": { "zoneTag": self.zone_id, "since": since, "until": until }
+        });
+
+        let response = self
+            .client
+            .post("https://api.cloudflare.com/client/v4/graphql")
+            .bearer_auth(&self.api_token)
+            .json(&payload)
+            .send()
+            .await
+            .map_err(|e| e.to_string())?;
+
+        let data: serde_json::Value = response.json().await.map_err(|e| e.to_string())?;
+
+        if let Some(errors) = data["errors"].as_array() {
+            if !errors.is_empty() {
+                let message = errors
+                    .iter()
+                    .filter_map(|error| error["message"].as_str())
+                    .collect::<Vec<_>>()
+                    .join("; ");
+                return Err(format!("Cloudflare GraphQL error: {}", message));
+            }
+        }
+
+        let groups = data["data"]["viewer"]["zones"][0]["httpRequestsAdaptiveGroups"]
+            .as_array()
+            .ok_or_else(|| format!("Unexpected response structure: {}", data))?;
+
+        let stats: Vec<TopLevelStat> = groups
+            .iter()
+            .filter_map(|g| {
+                let path = g["dimensions"]["clientRequestPath"].as_str()?;
+                let count = g["count"].as_i64()?;
+                if path.starts_with("/thumbnail/") && path.ends_with("/small") {
+                    let level_id_str = path.trim_start_matches("/thumbnail/").trim_end_matches("/small");
+                    if let Ok(level_id) = level_id_str.parse::<i64>() {
+                        return Some(TopLevelStat { level_id, requests: count });
+                    }
+                }
+                None
+            })
+            .collect();
+
+        Ok(stats)
+    }
 }
 
 pub fn purge(level_id: i64) {
@@ -273,6 +359,10 @@ pub fn purge_pending(upload_id: i64) {
     }
 
     tokio::spawn(CloudflareClient::get().purge_pending(upload_id));
+}
+
+pub fn is_configured() -> bool {
+    dotenv::var("CLOUDFLARE_API_KEY").is_ok() && dotenv::var("CLOUDFLARE_ZONE_ID").is_ok()
 }
 
 pub async fn get_user_stats() -> Result<u64, String> {

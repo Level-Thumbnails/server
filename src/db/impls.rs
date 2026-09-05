@@ -1,14 +1,7 @@
 use crate::db::filters::{
     apply_pending_filters, apply_pending_sort, apply_user_filters, apply_user_sort,
 };
-use crate::db::{
-    ActiveUpload, ActiveUploadsPage, AdminUserQueryOptions, AdminUserRow, AdminUsersPage, AppState,
-    BadgeLists, EnergyStats, LevelLock, MAX_MY_UPLOADS_PAGE_SIZE, MyUploadsSummary, NoteData,
-    PENDING_UPLOAD_SELECT, PendingQueryOptions, PendingUpload, PendingUploadsPage, RejectedUpload,
-    RejectedUploadsPage, ReplacedUpload, ReplacedUploadsPage, Settings, StatsSnapshot,
-    USER_STATS_CTE, UpdateUserOptions, UploadExtended, UploadInfo, User, UserBan, UserHistoryPoint,
-    UserStats,
-};
+use crate::db::{ActiveUpload, ActiveUploadsPage, AdminUserQueryOptions, AdminUserRow, AdminUsersPage, AppState, BadgeLists, EnergyStats, LevelLock, MyUploadsSummary, NoteData, PendingQueryOptions, PendingUpload, PendingUploadsPage, RejectedUpload, RejectedUploadsPage, ReplacedUpload, ReplacedUploadsPage, Settings, StatsSnapshot, TopLevelStat, TopLevelStatWithInfo, UpdateUserOptions, UploadExtended, UploadInfo, User, UserBan, UserHistoryPoint, UserStats, MAX_MY_UPLOADS_PAGE_SIZE, PENDING_UPLOAD_SELECT, USER_STATS_CTE};
 use crate::util;
 use crate::util::ModUserAgent;
 use chrono::{Datelike, NaiveDate, NaiveDateTime, Utc};
@@ -1423,6 +1416,101 @@ impl AppState {
             .bind(limit)
             .fetch_all(&*self.pool)
             .await
+    }
+
+    pub async fn has_collected_level_stats(&self, date: NaiveDate) -> Result<bool, sqlx::Error> {
+        sqlx::query_scalar(
+            "SELECT EXISTS(SELECT 1 FROM level_stats_collection_log WHERE date = $1)",
+        )
+            .bind(date)
+            .fetch_one(&*self.pool)
+            .await
+    }
+
+    pub async fn store_level_daily_stats(
+        &self,
+        date: NaiveDate,
+        stats: &[TopLevelStat],
+    ) -> Result<(), sqlx::Error> {
+        let mut tx = self.pool.begin().await?;
+
+        sqlx::query("DELETE FROM level_daily_stats WHERE date = $1")
+            .bind(date)
+            .execute(&mut *tx)
+            .await?;
+
+        if !stats.is_empty() {
+            let level_ids: Vec<i64> = stats.iter().map(|s| s.level_id).collect();
+            let requests: Vec<i64> = stats.iter().map(|s| s.requests).collect();
+
+            sqlx::query(
+                "INSERT INTO level_daily_stats (date, level_id, requests)
+                 SELECT $1, * FROM UNNEST($2::BIGINT[], $3::BIGINT[]) AS t(level_id, requests)",
+            )
+            .bind(date)
+            .bind(level_ids)
+            .bind(requests)
+            .execute(&mut *tx)
+            .await?;
+        }
+
+        sqlx::query(
+            "INSERT INTO level_stats_collection_log (date) VALUES ($1)
+             ON CONFLICT (date) DO NOTHING",
+        )
+        .bind(date)
+        .execute(&mut *tx)
+        .await?;
+
+        tx.commit().await
+    }
+
+    pub async fn get_top_levels(
+        &self,
+        since: NaiveDate,
+        limit: i64,
+    ) -> Result<Vec<TopLevelStatWithInfo>, sqlx::Error> {
+        sqlx::query_as::<_, TopLevelStatWithInfo>(
+            "WITH ranked AS (
+                SELECT level_id, SUM(requests)::BIGINT AS requests
+                FROM level_daily_stats
+                WHERE date >= $1
+                GROUP BY level_id
+                ORDER BY requests DESC
+                LIMIT $2
+            ), latest_notes AS (
+                SELECT DISTINCT ON (uploads.level_id)
+                    uploads.level_id,
+                    notes.level_name,
+                    notes.creator_id,
+                    notes.creator_name,
+                    notes.stars,
+                    notes.length,
+                    notes.rating,
+                    notes.difficulty
+                FROM uploads
+                LEFT JOIN notes ON notes.upload_id = uploads.id
+                WHERE uploads.accepted = TRUE AND uploads.deleted_at IS NULL
+                ORDER BY uploads.level_id, uploads.upload_time DESC, uploads.id DESC
+            )
+            SELECT
+                ranked.level_id,
+                ranked.requests,
+                latest_notes.level_name,
+                latest_notes.creator_id,
+                latest_notes.creator_name,
+                latest_notes.stars,
+                latest_notes.length,
+                latest_notes.rating,
+                latest_notes.difficulty
+            FROM ranked
+            LEFT JOIN latest_notes ON latest_notes.level_id = ranked.level_id
+            ORDER BY ranked.requests DESC",
+        )
+        .bind(since)
+        .bind(limit)
+        .fetch_all(&*self.pool)
+        .await
     }
 
     pub async fn get_total_level_count(&self) -> Result<i64, sqlx::Error> {

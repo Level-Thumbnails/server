@@ -345,6 +345,25 @@ pub struct StatsSnapshot {
 }
 
 #[derive(Debug, Clone, FromRow, Serialize, Deserialize)]
+pub struct TopLevelStat {
+    pub level_id: i64,
+    pub requests: i64,
+}
+
+#[derive(Debug, Clone, FromRow, Serialize, Deserialize)]
+pub struct TopLevelStatWithInfo {
+    pub level_id: i64,
+    pub requests: i64,
+    pub level_name: Option<String>,
+    pub creator_id: Option<i64>,
+    pub creator_name: Option<String>,
+    pub stars: Option<i64>,
+    pub length: Option<Length>,
+    pub rating: Option<Rating>,
+    pub difficulty: Option<Difficulty>,
+}
+
+#[derive(Debug, Clone, FromRow, Serialize, Deserialize)]
 pub struct UserHistoryPoint {
     pub period: NaiveDate,
     pub upload_count: i64,
