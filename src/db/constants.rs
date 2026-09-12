@@ -22,7 +22,7 @@ pub const USER_STATS_CTE: &str = r#"WITH upload_counts AS (
         user_id
     FROM uploads
     WHERE accepted = TRUE AND deleted_at IS NULL
-    ORDER BY level_id, accepted_time DESC, id DESC
+    ORDER BY level_id, COALESCE(uploads.accepted_time, uploads.upload_time) DESC, id DESC
 ), active_counts AS (
     SELECT
         user_id,

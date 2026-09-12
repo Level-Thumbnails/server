@@ -167,7 +167,7 @@ async fn migrate_hardlink_storage(pool: &sqlx::Pool<Postgres>) {
                 FROM uploads
                 LEFT JOIN notes ON uploads.id = notes.upload_id
                 WHERE uploads.accepted = TRUE AND uploads.deleted_at IS NULL
-                ORDER BY uploads.level_id, uploads.accepted_time DESC, uploads.id DESC
+                ORDER BY uploads.level_id, COALESCE(uploads.accepted_time, uploads.upload_time) DESC, uploads.id DESC
             )
             SELECT id, level_id
             FROM active_uploads",
@@ -328,7 +328,7 @@ impl AppState {
              FROM uploads
              JOIN users ON uploads.user_id = users.id
              WHERE uploads.level_id = $1 AND accepted = TRUE AND uploads.deleted_at IS NULL
-             ORDER BY accepted_time DESC LIMIT 1",
+             ORDER BY COALESCE(uploads.accepted_time, uploads.upload_time) DESC LIMIT 1",
         )
         .bind(id)
         .fetch_optional(&*self.pool)
@@ -355,7 +355,7 @@ impl AppState {
              JOIN users ON uploads.user_id = users.id
              LEFT JOIN users AS accepted_by ON uploads.accepted_by = accepted_by.id
              WHERE uploads.level_id = $1 AND accepted = TRUE AND uploads.deleted_at IS NULL
-             ORDER BY accepted_time DESC LIMIT 1",
+             ORDER BY COALESCE(uploads.accepted_time, uploads.upload_time) DESC LIMIT 1",
         )
             .bind(id)
             .fetch_optional(&*self.pool)
@@ -781,7 +781,7 @@ impl AppState {
                     uploads.level_id
                 FROM uploads
                 WHERE uploads.accepted = TRUE AND uploads.deleted_at IS NULL
-                ORDER BY uploads.level_id, uploads.accepted_time DESC, uploads.id DESC
+                ORDER BY uploads.level_id, COALESCE(uploads.accepted_time, uploads.upload_time) DESC, uploads.id DESC
             )
             SELECT COUNT(*) FROM active_uploads WHERE user_id = $1 AND ($2::BIGINT IS NULL OR level_id = $2)",
         )
@@ -865,7 +865,7 @@ impl AppState {
                         uploads.level_id
                     FROM uploads
                     WHERE uploads.accepted = TRUE AND uploads.deleted_at IS NULL
-                    ORDER BY uploads.level_id, uploads.accepted_time DESC, uploads.id DESC
+                    ORDER BY uploads.level_id, COALESCE(uploads.accepted_time, uploads.upload_time) DESC, uploads.id DESC
                 )
                 SELECT COUNT(*) FROM active_uploads WHERE user_id = $1 AND level_id = $2",
             )
@@ -880,7 +880,7 @@ impl AppState {
                         uploads.user_id
                     FROM uploads
                     WHERE uploads.accepted = TRUE AND uploads.deleted_at IS NULL
-                    ORDER BY uploads.level_id, uploads.accepted_time DESC, uploads.id DESC
+                    ORDER BY uploads.level_id, COALESCE(uploads.accepted_time, uploads.upload_time) DESC, uploads.id DESC
                 )
                 SELECT COUNT(*) FROM active_uploads WHERE user_id = $1",
             )
@@ -925,7 +925,7 @@ impl AppState {
                     uploads.level_id,
                     LEAD(uploads.id) OVER (
                         PARTITION BY uploads.level_id
-                        ORDER BY uploads.accepted_time ASC, uploads.id ASC
+                        ORDER BY COALESCE(uploads.accepted_time, uploads.upload_time) ASC, uploads.id ASC
                     ) AS replacement_id
                 FROM uploads
                 WHERE uploads.accepted = TRUE AND uploads.deleted_at IS NULL
@@ -947,7 +947,7 @@ impl AppState {
                     uploads.user_id,
                     LEAD(uploads.id) OVER (
                         PARTITION BY uploads.level_id
-                        ORDER BY uploads.accepted_time ASC, uploads.id ASC
+                        ORDER BY COALESCE(uploads.accepted_time, uploads.upload_time) ASC, uploads.id ASC
                     ) AS replacement_id
                 FROM uploads
                 WHERE uploads.accepted = TRUE AND uploads.deleted_at IS NULL
@@ -1628,15 +1628,15 @@ impl AppState {
                     uploads.accepted_time,
                     LEAD(uploads.id) OVER (
                         PARTITION BY uploads.level_id
-                        ORDER BY uploads.accepted_time ASC, uploads.id ASC
+                        ORDER BY COALESCE(uploads.accepted_time, uploads.upload_time) ASC, uploads.id ASC
                     ) AS replacement_id,
                     LEAD(uploads.user_id) OVER (
                         PARTITION BY uploads.level_id
-                        ORDER BY uploads.accepted_time ASC, uploads.id ASC
+                        ORDER BY COALESCE(uploads.accepted_time, uploads.upload_time) ASC, uploads.id ASC
                     ) AS replacement_by_user_id,
                     LEAD(uploads.upload_time) OVER (
                         PARTITION BY uploads.level_id
-                        ORDER BY uploads.accepted_time ASC, uploads.id ASC
+                        ORDER BY COALESCE(uploads.accepted_time, uploads.upload_time) ASC, uploads.id ASC
                     ) AS replaced_at
                 FROM uploads
                 WHERE uploads.accepted = TRUE AND uploads.deleted_at IS NULL
@@ -1676,7 +1676,7 @@ impl AppState {
                     uploads.level_id,
                     LEAD(uploads.id) OVER (
                         PARTITION BY uploads.level_id
-                        ORDER BY uploads.accepted_time ASC, uploads.id ASC
+                        ORDER BY COALESCE(uploads.accepted_time, uploads.upload_time) ASC, uploads.id ASC
                     ) AS replacement_id
                 FROM uploads
                 WHERE uploads.accepted = TRUE AND uploads.deleted_at IS NULL
